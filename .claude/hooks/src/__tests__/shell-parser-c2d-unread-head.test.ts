@@ -99,6 +99,60 @@ describe('U: an unread head (a word with no literal) fails closed at its rank', 
   });
 });
 
+describe('V: the raw-text backstop for gh api (seat replan 11-27 07:31, Dave chose it)', () => {
+  // A gh api call whose raw text names a pulls segment and that has ANY word with no literal fails closed at the create rank (scope other, no tap clears it),
+  // except one narrow read: no method flag, no field or input flag, and the only word with no literal is the endpoint (a slash, a literal part, a variable owner or repo).
+  // Change that breaks it: createCallOf reads the method or a field only from literal words, so a word with no literal hides the write.
+  const F = '-f head=feat/x -f base=main -f title=t';
+  const holes: [string, Tool, string][] = [
+    ['P1a a method word with no literal, variable repo path (Bash)', 'Bash', `gh api -X $M repos/$O/$Rp/pulls ${F}`],
+    ['P1b --method with a variable, quoted variable path (Bash)', 'Bash', `gh api --method $M "repos/$O/$Rp/pulls" ${F}`],
+    ['P1c a method word with no literal, LITERAL repo path (Bash)', 'Bash', `gh api -X $M ${R}/pulls ${F}`],
+    ['P1d -X "$M" with a trailing slash (Bash)', 'Bash', `gh api -X "$M" repos/$O/$Rp/pulls/ ${F}`],
+    ['P1e a method word with no literal (PowerShell)', 'PowerShell', `gh api -X $m repos/$o/$rp/pulls ${F}`],
+    ['P1f --method with a variable (PowerShell)', 'PowerShell', `gh api --method $m repos/$o/$rp/pulls ${F}`],
+    ['V1 --method=$M in one word (Bash)', 'Bash', `gh api --method=$M repos/$O/$Rp/pulls ${F}`],
+    ['V2 a read plus one bare variable word after the endpoint (Bash)', 'Bash', 'gh api repos/$O/$Rp/pulls/705 $EXTRA'],
+    ['V3 a read plus one bare variable word after the endpoint (PowerShell)', 'PowerShell', 'gh api repos/$o/$rp/pulls/705 $extra'],
+    ['V4 a PowerShell splat of an args array, variable repo path', 'PowerShell', 'gh api repos/$o/$rp/pulls @args'],
+    ['V5 a PowerShell splat of an args array, literal repo path', 'PowerShell', `gh api repos/${REPO}/pulls @args`],
+    ['V6 a variable field value with a literal path (Bash)', 'Bash', `gh api -X POST repos/${REPO}/pulls -f head=$B -f base=main -f title=t`],
+    ['V7 a variable field value with a literal path (PowerShell)', 'PowerShell', `gh api -X POST repos/${REPO}/pulls -f head=$b -f base=main -f title=t`],
+    ['V8 an unquoted variable title (it splits into more words)', 'Bash', `gh api -X POST repos/${REPO}/pulls -f head=feat/x -f base=main -f title=$T`],
+  ];
+  it.each(holes)('%s: denied with no tap', async (_n, tool, text) => {
+    expect(denied(await verdict(text, tool)), `${tool}: ${text}`).toBe(true);
+  });
+  it.each(holes)('%s: denied even with a land tap and an open tap', async (_n, tool, text) => {
+    landTap(7);
+    openTap();
+    expect(denied(await verdict(text, tool)), `${tool}: ${text}`).toBe(true);
+  });
+  const reads: [string, Tool, string][] = [
+    ['VC1 a read with a variable repo path and no method or field flag (Bash)', 'Bash', 'gh api repos/$O/$Rp/pulls/705 --jq .title'],
+    ['VC2 a read with a variable repo path and no method or field flag (PowerShell)', 'PowerShell', 'gh api repos/$o/$rp/pulls/705 --jq .title'],
+    ['VC3 a paginated read with a variable repo path', 'Bash', 'gh api repos/$O/$Rp/pulls --paginate --jq ".[].number"'],
+  ];
+  it.each(reads)('%s: allowed with no tap and with taps', async (_n, tool, text) => {
+    expect(await verdict(text, tool), `${tool}: ${text}`).toBe('allow');
+    landTap(7);
+    openTap();
+    expect(await verdict(text, tool), `${tool} (taps): ${text}`).toBe('allow');
+  });
+  it('VC4 a literal POST create: denied with no tap, allowed with the open tap (as today)', async () => {
+    const text = `gh api -X POST repos/${REPO}/pulls ${F}`;
+    expect(denied(await verdict(text))).toBe(true);
+    openTap();
+    expect(await verdict(text)).toBe('allow');
+  });
+  it('VC5 a literal POST create in PowerShell: denied with no tap, allowed with the open tap (as today)', async () => {
+    const text = `gh api -X POST repos/${REPO}/pulls ${F}`;
+    expect(denied(await verdict(text, 'PowerShell'))).toBe(true);
+    openTap();
+    expect(await verdict(text, 'PowerShell')).toBe('allow');
+  });
+});
+
 describe('UC: literal controls keep their verdict (the fix must not widen the deny)', () => {
   it('UC1 a literal api create with the open tap: allowed', async () => {
     openTap();
@@ -139,8 +193,9 @@ describe('UC: literal controls keep their verdict (the fix must not widen the de
   it('UC8 a POST to an actions rerun endpoint with a variable run id: allowed', async () => {
     expect(await verdict('gh api -X POST "repos/Rev4nchist/Continuous-Claude-v3/actions/runs/$id/rerun-failed-jobs"')).toBe('allow');
   });
-  it('UC9 a field POST to a PR comment reply endpoint with a variable repo: allowed', async () => {
-    expect(await verdict('gh api "$repo/pulls/685/comments/$CID/replies" -f "body=$TEXT" --jq .id')).toBe('allow');
+  // A named cost of the raw-text backstop (seat replan 07:31, Dave chose it): the raw text names pulls, the call has a field flag and words with no literal, so it fails closed. It was allowed before the replan.
+  it('UC9 (named cost) a field POST to a PR comment reply endpoint with a variable repo: denied, as the raw-text rule says', async () => {
+    expect(denied(await verdict('gh api "$repo/pulls/685/comments/$CID/replies" -f "body=$TEXT" --jq .id'))).toBe(true);
   });
   it('UC10 a literal api create with a trailing slash and the open tap: allowed', async () => {
     openTap();

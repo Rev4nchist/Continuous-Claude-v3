@@ -1026,6 +1026,30 @@ function callHoldsHeredoc(call: Call, r: ParseResult | undefined): boolean {
   const inCall = (at: number): boolean => at >= call.start && at <= call.end;
   return r.heredocs.some((h) => h.callStart === null || inCall(h.callStart)) || r.bodies.some(([from, to]) => from >= call.start && to <= call.end);
 }
+/**
+ * C2d fix round, the raw-text backstop for gh api (seat replan 11-27 07:31, Dave chose it). Each narrow pass found one more unread word (the endpoint, then the method), so the gate stops reading
+ * the parts of a gh api call that it cannot read. A call whose raw text names a `pulls` path segment and that has ANY word with no literal fails closed at the create rank (a bad read: scope other,
+ * no tap clears it). One narrow allow, and all three hold: (1) no method flag and no field or input flag in the raw text of the call; (2) the only word with no literal is the endpoint word, and it holds a
+ * slash and a literal part (repos/ with a variable owner or repo); (3) no other word is a bare variable, a splat, a substitution or a brace form (such a word has no literal, so (2) already excludes it).
+ * That call can only be a read. A call with every word literal keeps the literal parse below.
+ */
+const API_PULLS_SEGMENT = /(?:^|[/\s=])pulls(?=$|[/?\s])/i;
+const API_WRITE_FLAG = /(?:^|\s)["']?(?:-X|--method|-[fF]|--(?:field|raw-field|input))/;
+/** A word the parse cannot read whole: no literal, or a bare variable or a splat (a `$` or `@` word, however the parse spelled it). A single-quoted word is text. */
+const unreadWord = (x: { lit: string | null; raw: string }): boolean => x.lit === null || (!x.raw.startsWith("'") && /^["']?[@$]/.test(x.raw));
+function apiUnreadHead(w: Call['words']): boolean {
+  const text = w.map((x) => x.raw).join(' ');
+  if (!API_PULLS_SEGMENT.test(text.replace(/["']/g, ' ')) || !w.some(unreadWord)) return false;
+  if (API_WRITE_FLAG.test(text)) return true; // (1) a method or a field flag anywhere: not a read
+  const args = w.slice(2);
+  const unread = args.filter(unreadWord);
+  if (unread.length !== 1) return true; // (2) and (3): more than one word with no literal, or none of them an endpoint
+  const word = unread[0];
+  const prev = args[args.indexOf(word) - 1]?.lit;
+  if (word.raw.startsWith('-') || (prev != null && (API_FIELD.test(prev) || API_VALUE.has(prev)))) return true; // it is a flag or a flag value, not the endpoint
+  const literalPart = word.raw.replace(/["']/g, '').replace(/\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_]\w*/g, '');
+  return !(literalPart.includes('/') && /[A-Za-z]/.test(literalPart)); // (2) a slash and a literal part
+}
 function createCallOf(call: Call, r?: ParseResult): AstCreate | null {
   const w = call.words;
   if (w.length < 3 || progName(w[0].lit) !== 'gh') return null;
@@ -1046,6 +1070,7 @@ function createCallOf(call: Call, r?: ParseResult): AstCreate | null {
     return { read: cliCreateOfWords(lits), cwdBefore, text };
   }
   if (sub(1) !== 'api') return null;
+  if (apiUnreadHead(w)) return { read: BAD(NOT_LITERAL_WORD), cwdBefore, text };
   const args = w.slice(2);
   const valueFlag = (l: string | null | undefined): boolean => l != null && (API_FIELD.test(l) || API_VALUE.has(l));
   const endpoint = args.find((a, i) => a.lit !== null && !a.lit.startsWith('-') && !valueFlag(args[i - 1]?.lit));

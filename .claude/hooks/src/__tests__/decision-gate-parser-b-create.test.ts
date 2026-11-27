@@ -102,12 +102,18 @@ describe('port step 3: create head and base from the parser words', () => {
   });
   it('C4: a title or body made by $( ) in double quotes no longer hides the head (named cost removal)', async () => {
     openTap('feat/x');
-    for (const c of [`${C} --head feat/x --base main --title t --body "$(cat notes.md)"`, `${C} --head feat/x --body="$(cat notes.md)"`, `gh api repos/${REPO}/pulls -X POST -f head=feat/x -f base=main -f body="$(cat notes.md)"`]) {
+    for (const c of [`${C} --head feat/x --base main --title t --body "$(cat notes.md)"`, `${C} --head feat/x --body="$(cat notes.md)"`]) {
       const r = await both(c);
       // C2b (class B): the old side now reads with a parse too; main with a parse gives this answer, the hand reader is retired.
       expect(r.oldP, `old ${c}`).toBe('allow');
       expect(r.newP, `new ${c}`).toBe('allow');
     }
+  });
+  it('C4c (named cost of the C2d raw-text backstop, seat replan 11-27 07:31): a gh api create with a $( ) body is an unread head, even with the tap', async () => {
+    openTap('feat/x');
+    // The raw text names a pulls segment and the body word has no literal: the call fails closed at the create rank. gh pr create keeps its safe title and body values (C4).
+    const r = await both(`gh api repos/${REPO}/pulls -X POST -f head=feat/x -f base=main -f body="$(cat notes.md)"`);
+    expect(r.newP).toBe('head-unresolved');
   });
   it('C4b: a $( ) body does not hide an untapped head: the head still decides', async () => {
     const r = await both(`${C} --head feat/z --body "$(cat notes.md)"`);

@@ -2650,6 +2650,22 @@ function callHoldsHeredoc(call, r) {
   const inCall = (at2) => at2 >= call.start && at2 <= call.end;
   return r.heredocs.some((h) => h.callStart === null || inCall(h.callStart)) || r.bodies.some(([from, to]) => from >= call.start && to <= call.end);
 }
+var API_PULLS_SEGMENT = /(?:^|[/\s=])pulls(?=$|[/?\s])/i;
+var API_WRITE_FLAG = /(?:^|\s)["']?(?:-X|--method|-[fF]|--(?:field|raw-field|input))/;
+var unreadWord = (x) => x.lit === null || !x.raw.startsWith("'") && /^["']?[@$]/.test(x.raw);
+function apiUnreadHead(w) {
+  const text = w.map((x) => x.raw).join(" ");
+  if (!API_PULLS_SEGMENT.test(text.replace(/["']/g, " ")) || !w.some(unreadWord)) return false;
+  if (API_WRITE_FLAG.test(text)) return true;
+  const args = w.slice(2);
+  const unread = args.filter(unreadWord);
+  if (unread.length !== 1) return true;
+  const word = unread[0];
+  const prev = args[args.indexOf(word) - 1]?.lit;
+  if (word.raw.startsWith("-") || prev != null && (API_FIELD.test(prev) || API_VALUE.has(prev))) return true;
+  const literalPart = word.raw.replace(/["']/g, "").replace(/\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_]\w*/g, "");
+  return !(literalPart.includes("/") && /[A-Za-z]/.test(literalPart));
+}
 function createCallOf(call, r) {
   const w = call.words;
   if (w.length < 3 || progName(w[0].lit) !== "gh") return null;
@@ -2678,6 +2694,7 @@ function createCallOf(call, r) {
     return { read: cliCreateOfWords(lits2), cwdBefore, text };
   }
   if (sub(1) !== "api") return null;
+  if (apiUnreadHead(w)) return { read: BAD(NOT_LITERAL_WORD), cwdBefore, text };
   const args = w.slice(2);
   const valueFlag = (l) => l != null && (API_FIELD.test(l) || API_VALUE.has(l));
   const endpoint = args.find((a, i) => a.lit !== null && !a.lit.startsWith("-") && !valueFlag(args[i - 1]?.lit));
