@@ -28,8 +28,9 @@ const ROOT = path.resolve(HERE, '..', '..');
 
 export const STEPS = ['commit-and-push', 'open-pr', 'land', 'paid-round', 'cli-skip', 'cap-override'];
 // A command mention: the step word is followed by a flag, by punctuation that closes the mention, or by the end of the line. Prose such as
-// "a ship-ask cap-override question" names the step as a noun and is no mention.
-const MENTION = new RegExp(`ship-ask(?:\\.mjs)?\\s+(${STEPS.join('|')})(?![\\w-])(?=\\s+--|\\s*[)\`'".,;:]|\\s*$)([^\\n]*)`, 'g');
+// "a ship-ask cap-override question" names the step as a noun and is no mention. The rest of the line ends at the next ship-ask, so two commands
+// on one line are each checked.
+const MENTION = new RegExp(`ship-ask(?:\\.mjs)?\\s+(${STEPS.join('|')})(?![\\w-])(?=\\s+--|\\s*[)\`'".,;:]|\\s*$)((?:(?!ship-ask)[^\\n])*)`, 'g');
 
 const OWNED = [
   'scripts/github/land-pr.ps1',
