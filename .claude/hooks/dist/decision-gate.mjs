@@ -2382,7 +2382,7 @@ var scopeOf = (s) => s.kind === "push" ? "push" : "other";
 var LAND_SCRIPT_RE = /\bland-pr\.ps1\b/i;
 var LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)(?![\w`])/i;
 var PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
-var CLEANUP_RE = /(?:^|\s)-CleanupOnly(?::["']?\$?true["']?)?(?![\w:$`-])/i;
+var CLEANUP_RE = /(?:^|\s)-CleanupOnly(?::["']?\$?true["']?)?(?![\w:$`.\[(-])/i;
 var MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
 var GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;
 var SHA_RE = /(?:\bsha=|--match-head-commit(?:\s+|=))["']?([0-9a-f]{40})\b/i;

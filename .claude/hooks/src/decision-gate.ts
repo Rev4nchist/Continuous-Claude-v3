@@ -739,7 +739,7 @@ const LAND_PR_RE = /(?:^|\s)-P(?:r)?(?:\s+|:|=)["']?(\d+)(?![\w`])/i;
 /** Looser than LAND_PR_RE: -P or -Pr, then any run of space, :, =, or quote marks, then a digit. Used only to refuse the text-only exemption. */
 const PR_NUMBER_IN_TEXT_RE = /-Pr?[\s:="']*\d/i;
 // C2d step 4: -CleanupOnly counts only as the bare switch or a literal true form (-CleanupOnly:$true). -CleanupOnly:$false, a variable or any expression is not cleanup (fail closed: the call is a land).
-const CLEANUP_RE = /(?:^|\s)-CleanupOnly(?::["']?\$?true["']?)?(?![\w:$`-])/i;
+const CLEANUP_RE = /(?:^|\s)-CleanupOnly(?::["']?\$?true["']?)?(?![\w:$`.\[(-])/i; // a dot, a bracket or a paren after the true form binds a member, index or call result (null): not cleanup
 const MERGE_CLI_RE = /\bgh\s+pr\s+merge\b([^|;&\n]*)/i;
 const MERGE_API_RE = /\bgh\s+api\b[^|;&\n]*\/pulls\/(\d+)\/merge\b[^|;&\n]*/i;
 const GET_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))GET\b/i;

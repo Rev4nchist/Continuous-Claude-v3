@@ -135,6 +135,14 @@ describe('O: old holes, the same on main (design note section 5)', () => {
   it('o01 the land script with -CleanupOnly:$false merges, and is denied with no tap', async () => {
     expect(denied(await verdict(`pwsh -File ${LAND} -Pr 6 -CleanupOnly:$false`)), 'Bash').toBe(true);
   });
+  // Seat read 20:34: PowerShell binds -CleanupOnly:$true.x, :$true[1] and :$true( as a member, index or call result (null), so the switch is false and the script lands.
+  it.each([['o01b a dot after the true form', '-CleanupOnly:$true.x'], ['o01c a bracket after the true form', '-CleanupOnly:$true[1]'], ['o01d a paren after the true form', '-CleanupOnly:$true(1)']])('%s: the land is denied with no tap', async (_n, arg) => {
+    expect(denied(await verdict(`pwsh -File ${LAND} -Pr 6 ${arg}`)), 'Bash').toBe(true);
+  });
+  it('o01e the bare switch and the literal true form stay cleanup (control)', async () => {
+    expect(denied(await verdict(`pwsh -File ${LAND} -Pr 6 -CleanupOnly`)), 'bare').toBe(false);
+    expect(denied(await verdict(`pwsh -File ${LAND} -Pr 6 -CleanupOnly:$true`)), 'true').toBe(false);
+  });
   it('o02 a backtick inside -Pr binds another PR (tap for 5, text binds 56): denied', async () => {
     landTap(5);
     expect(denied(await verdict(`& ${LAND} -Pr 5\`6`, 'PowerShell')), 'PowerShell').toBe(true);
