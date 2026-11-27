@@ -332,6 +332,9 @@ test('SG15: a file over 1,000,000 bytes is scanned: a finding in it fails the ru
 function assertFindings({ code, lines }) {
   assert.equal(code, 1, `a finding in a file over the default size limit must fail the run:\n${lines.join('\n')}`);
   assert.ok(lines.some((l) => l.includes('big.mjs')), lines.join('\n'));
+  // The ratchet counts new KEYS ("new 1"); the three violations of the fixture are the count on the rule key of big.mjs ("now 3").
+  assert.ok(lines.some((l) => /^NEW\s+rules\.ccv3-argv-index-as-path\|scripts\/big\.mjs\s+\(baseline 0, now 3\)/.test(l)), `the three violations of the fixture are new findings:\n${lines.join('\n')}`);
+  assert.ok(!lines.some((l) => l.includes('scan-error|')), `a scan-error is not a finding:\n${lines.join('\n')}`);
 }
 
 test('SG15b: the SG15 check refuses a run whose only result is a scan-error in the big file', () => {
