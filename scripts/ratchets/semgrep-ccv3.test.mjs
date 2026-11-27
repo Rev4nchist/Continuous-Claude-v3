@@ -218,3 +218,75 @@ test('SG9: the --time data gives one slowest-file line, a NOTE over half the lim
   const norm = sg.normaliseOpengrepReport({ results: [], errors: [], time: { targets: [{ path: 'scripts\\github\\pre-pr.cases.mjs', run_time: 1 }] } });
   assert.equal(norm.time.targets[0].path, 'scripts/github/pre-pr.cases.mjs');
 });
+
+// ---------- seat ruling B (trimmed), 2026-11-26 21:30: one fix round on 1d4f0432 ----------
+
+const timeNoise = (lines) => lines.filter((l) => l.includes('TIMEOUT') || l.includes('slowest file') || l.startsWith('NOTE semgrep-ccv3'));
+
+test('SG10: a malformed time report never crashes the wrapper: it says "time data unreadable" and still ratchets', () => {
+  const shapes = {
+    'a null in time.targets': { results: [], errors: [], time: { targets: [null] } },
+    'parse_times that is not an array': { results: [], errors: [], time: { targets: [{ path: 'scripts/a.mjs', parse_times: 5 }] } },
+    'errors that is an object': { results: [], errors: {}, time: { targets: [] } },
+  };
+  for (const [name, shape] of Object.entries(shapes)) {
+    const h = harness({ spawn: ok(JSON.stringify(shape)) });
+    let ratcheted = false;
+    let code;
+    assert.doesNotThrow(() => { code = main([], { ...h.deps, ratchet: () => { ratcheted = true; return 0; } }); }, name);
+    assert.equal(code, 0, `${name}: the ratchet decides the exit`);
+    assert.equal(ratcheted, true, `${name}: the ratchet still runs`);
+    assert.ok(h.lines.some((l) => l.includes('time data unreadable')), `${name}: ${h.lines.join('\n')}`);
+  }
+  // a well-formed report says nothing of the kind
+  const fine = harness({ spawn: ok(report()) });
+  assert.equal(main([], fine.deps), 0);
+  assert.ok(!fine.lines.some((l) => l.includes('time data unreadable')), fine.lines.join('\n'));
+});
+
+test('SG11: a Timeout with --changed fails in a touched file and is DRIFT (exit 0, still said out loud) in an untouched one', () => {
+  const file = 'scripts/github/pre-pr.cases.mjs';
+  const body = JSON.stringify({ results: [], errors: [timeoutError(file)] });
+  const touched = harness({ spawn: ok(body) });
+  const changedT = path.join(touched.dir, 'changed.txt');
+  writeFileSync(changedT, `${file}\n`);
+  assert.equal(main(['--changed', changedT], touched.deps), 1, 'a timeout in a touched file fails');
+  const untouched = harness({ spawn: ok(body) });
+  const changedU = path.join(untouched.dir, 'changed.txt');
+  writeFileSync(changedU, 'scripts/other.mjs\n');
+  assert.equal(main(['--changed', changedU], untouched.deps), 0, 'a timeout in an untouched file is drift');
+  assert.ok(untouched.lines.some((l) => l.startsWith('DRIFT ') && l.includes(`scan-error|${file}`)), untouched.lines.join('\n'));
+  assert.ok(untouched.lines.some((l) => l.includes('TIMEOUT') && l.includes(file)), 'the drift is still said to be a timeout');
+  const full = harness({ spawn: ok(body) });
+  assert.equal(main([], full.deps), 1, 'without --changed (pre-pr) it fails');
+});
+
+test('SG12: the time lines read seconds, rule and duplicates right, and the half-limit NOTE has an exact edge', () => {
+  const run = (errors, targets) => { const h = harness({ spawn: ok(JSON.stringify({ results: [], errors, time: { targets } })) }); main([], h.deps); return h.lines; };
+  // no run_time: parse and match times add up
+  const added = run([], [{ path: 'scripts/p.mjs', parse_times: [3, 4], match_times: [1] }]);
+  assert.ok(added.some((l) => l.includes('slowest file scripts/p.mjs 8.0 s of 90 s')), added.join('\n'));
+  // the rule comes from the message when rule_id is absent, and reads "unknown rule" when neither names it
+  const fromMessage = run([{ ...timeoutError('scripts/a.mjs', 'x.y.rule-from-message'), rule_id: undefined }], []);
+  assert.ok(fromMessage.some((l) => l.includes('TIMEOUT scripts/a.mjs (rule-from-message)')), fromMessage.join('\n'));
+  const nameless = run([{ type: 'Timeout', message: 'Timeout', path: 'scripts/a.mjs' }], []);
+  assert.ok(nameless.some((l) => l.includes('TIMEOUT scripts/a.mjs (unknown rule)')), nameless.join('\n'));
+  // one TIMEOUT line for each file and rule, however often the engine repeats it
+  const twice = run([timeoutError('scripts/a.mjs', 'p.r1'), timeoutError('scripts/a.mjs', 'p.r1'), timeoutError('scripts/a.mjs', 'p.r2')], []);
+  assert.equal(twice.filter((l) => l.includes('TIMEOUT')).length, 2, twice.join('\n'));
+  // exactly half the limit is no NOTE; just over it is
+  const half = run([], [{ path: 'scripts/h.mjs', run_time: 45 }]);
+  assert.ok(!half.some((l) => l.startsWith('NOTE')), half.join('\n'));
+  const over = run([], [{ path: 'scripts/h.mjs', run_time: 45.5 }]);
+  assert.ok(over.some((l) => l.startsWith('NOTE') && l.includes('scripts/h.mjs')), over.join('\n'));
+});
+
+test('SG13: a control character in a file name never reaches a printed time line', () => {
+  const evil = 'scripts/a.mjs\nsemgrep-ccv3: all clear\u0007';
+  const h = harness({ spawn: ok(JSON.stringify({ results: [], errors: [timeoutError(evil)], time: { targets: [{ path: evil, run_time: 60 }] } })) });
+  main([], h.deps);
+  const noise = timeNoise(h.lines);
+  assert.ok(noise.length >= 3, `a TIMEOUT, a slowest and a NOTE line: ${h.lines.join('\n')}`);
+  for (const l of noise) assert.ok(!/[\u0000-\u001f\u007f]/.test(l), `a control character in: ${JSON.stringify(l)}`);
+  assert.ok(noise.some((l) => l.includes('scripts/a.mjs')), 'the name is still readable');
+});
