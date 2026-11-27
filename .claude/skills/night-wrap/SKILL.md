@@ -20,7 +20,7 @@ Not the seat, or no holder of `re-program`: run only the dry run of Step 2, prin
 
 1. Read the clock in CST. Run `lane.mjs mine`, `lane.mjs inbox --peek` and `ListAgents`. Read every CUT line in full.
 2. Answer every builder message that waits on a seat read. A ruling made now is "for the morning": the builder puts it in its handoff NEXT.
-3. A land in flight: finish the cycle (LAND DONE and recheck) or hold it for the morning. Never leave LAND HOLD open overnight.
+3. A land in flight: finish the cycle (LAND DONE and recheck) or hold it for the morning.
 
 ## Step 2: dry run
 
@@ -77,7 +77,7 @@ One table: session, stop point, outcome, handoff link. Then the Morning start li
 ## NEVER
 
 - Run `/compact` for another session, kill a session, or remove a folder or worktree.
-- Leave a run lock, the publish lock or LAND HOLD held overnight.
+- Leave a run lock or the publish lock held overnight.
 - Land or merge a pull request, or set a band, during the wrap. Landing needs Dave's own tap and the land script is not part of this skill.
 - Ask Dave an outcome tap per session.
 - Write a pull request number or a listed id in the Morning start row without a scan.
