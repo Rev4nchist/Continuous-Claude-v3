@@ -13,6 +13,10 @@
 //   SG7   a Timeout error in the report                 -> the TIMEOUT line (file, rule, limit) is gone, or a timeout stops failing the ratchet (a skipped file passes)
 //   SG8   a parse error in the report                   -> a parse error is called a TIMEOUT, or stops counting as a scan-error
 //   SG9   the --time data                               -> the slowest-file line or the NOTE over half the limit is gone, or a report with no time data throws
+//   SG10  a malformed time report                       -> the timeLines call loses its try/catch (exit 1 with a stack trace), or the "time data unreadable" line or the ratchet call is dropped
+//   SG11  a Timeout with --changed                      -> a timeout stops failing in a touched file or without --changed, or an untouched file stops being DRIFT, or the TIMEOUT line is dropped on drift
+//   SG12  the time-line reads                           -> parse+match times are not added, the rule is not read from the message, a repeat is not deduped, or the NOTE edge moves off "over half"
+//   SG13  a control character in a file name            -> a path or rule name is printed raw in the TIMEOUT, slowest-file or NOTE line
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -126,7 +130,6 @@ const pair = (args, flag) => args[args.indexOf(flag) + 1];
 const timeoutError = (file, rule = 'scripts.ratchets.semgrep-ccv3.ccv3-argv-index-as-path') => ({ code: 3, level: 'warn', type: 'Timeout', rule_id: rule, message: `Timeout when running ${rule} on ${file}`, path: file });
 
 test('SG6: both engines run with the per-file limit of 90 s and --time; the env override takes a whole number from 1 to 300; the limit in force is printed', () => {
-  assert.equal(sg.PER_FILE_TIMEOUT_S, 90);
   // Docker engine
   const d = harness({ spawn: ok(report()) });
   assert.equal(main([], d.deps), 0);

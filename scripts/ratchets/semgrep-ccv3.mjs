@@ -14,8 +14,11 @@
  * anything else exits 2 before any scan).
  * Per-file limit: PER_FILE_TIMEOUT_S (90 s) for both engines. The limit covers the PARSE of a file, which does not follow its size
  * (card semgrep-timeout-large-files: a 330 KB test file parses in 11 s here, and a CI runner that is 2 times slower failed it at 30 s). A file that still
- * times out is a scan-error and FAILS the ratchet as before (a skipped file must never pass); the wrapper says it was a timeout, in which file and rule.
- * Both scans run with --time: one line names the slowest file, and a NOTE says so when it took over half the limit.
+ * times out is a scan-error, and a scan-error follows the rule of every scan-error: it FAILS a run without --changed (pre-pr) and a run where the file is in
+ * the --changed list; with --changed and the file untouched it is DRIFT (printed, exit 0). A skipped file never passes in a touched file. The wrapper says it
+ * was a timeout, in which file and rule. The engine's --timeout counts per rule and file, and the pack has three rules: one bad file can take up to 3 times the limit.
+ * Both scans run with --time: one line names the slowest file, and a NOTE says so when it took over half the limit. Time data that cannot be read is
+ * reported as "time data unreadable" and never stops the ratchet.
  * Docker mounts the rule folder at /rules, so its check ids are rules.<id>. The opengrep report is rewritten to the same
  * form (and to forward slashes), so one baseline serves both engines.
  *
@@ -43,7 +46,11 @@ export const EXCLUDES = ['scripts/ratchets/semgrep-ccv3', '.claude/cache', '.cla
 export const DOCKER_DOWN_MESSAGE = 'semgrep-ccv3: Docker is not running or not installed. Start Docker Desktop, then run this again.';
 const DAEMON_DOWN = /daemon|docker_engine|dockerDesktopLinuxEngine|error during connect|connection refused|cannot connect|is the docker/i;
 
-/** The per-file limit of both engines, in seconds. The worst file takes 17 s on a loaded developer machine; 90 leaves 5 times room and stays far under the 5 minute CI step. */
+/**
+ * The per-file limit of both engines, in seconds. The worst file takes 17 s on a loaded developer machine; 90 leaves 5 times room.
+ * The engine counts it per rule and file (3 rules in the pack), so one bad file can take about 270 s: that is near the 5 minute pre-pr gate for this
+ * ratchet. The CI step has no limit of its own; the job has 20 minutes.
+ */
 export const PER_FILE_TIMEOUT_S = 90;
 
 /** The limit in force: the default, or CCV3_SEMGREP_TIMEOUT_S when it is a whole number from 1 to 300. { seconds, overridden } or { error }. A typo is refused, never ignored. */
@@ -99,7 +106,9 @@ export function normaliseOpengrepReport(report) {
 }
 
 const isTimeout = (e) => (Array.isArray(e?.type) ? e.type[0] : e?.type) === 'Timeout' || /^Timeout\b/.test(String(e?.message ?? ''));
-const ruleOf = (e) => String(e.rule_id ?? /Timeout when running (\S+) on /.exec(String(e.message ?? ''))?.[1] ?? 'unknown rule').split('.').pop();
+/** A name from the report as one safe printed token: a control character (a newline in a file name) could forge a log line. */
+const printable = (s) => String(s).replace(/[\u0000-\u001f\u007f]/g, '?');
+const ruleOf = (e) => printable(String(e.rule_id ?? /Timeout when running (\S+) on /.exec(String(e.message ?? ''))?.[1] ?? 'unknown rule').split('.').pop());
 /** Seconds a target took: its run_time, else its parse and match times added up. */
 const secondsOf = (t) => (typeof t.run_time === 'number' ? t.run_time : [...(t.parse_times ?? []), ...(t.match_times ?? [])].reduce((a, b) => a + b, 0));
 
@@ -115,14 +124,14 @@ export function timeLines(report, seconds) {
     const key = `${e.path}|${ruleOf(e)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(`semgrep-ccv3: TIMEOUT ${e.path} (${ruleOf(e)}) over ${seconds} s: not a finding of a rule. Raise PER_FILE_TIMEOUT_S or split the file.`);
+    out.push(`semgrep-ccv3: TIMEOUT ${printable(e.path)} (${ruleOf(e)}) over ${seconds} s: not a finding of a rule. Raise PER_FILE_TIMEOUT_S or split the file.`);
   }
   const perFile = new Map();
   for (const t of report?.time?.targets ?? []) perFile.set(t.path, (perFile.get(t.path) ?? 0) + secondsOf(t));
   const [slowest, took] = [...perFile.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
   if (slowest !== undefined) {
-    out.push(`semgrep-ccv3: slowest file ${slowest} ${took.toFixed(1)} s of ${seconds} s`);
-    if (took > seconds / 2) out.push(`NOTE semgrep-ccv3: ${slowest} took over half the per-file limit (${took.toFixed(1)} s of ${seconds} s): it may time out on a slower runner.`);
+    out.push(`semgrep-ccv3: slowest file ${printable(slowest)} ${took.toFixed(1)} s of ${seconds} s`);
+    if (took > seconds / 2) out.push(`NOTE semgrep-ccv3: ${printable(slowest)} took over half the per-file limit (${took.toFixed(1)} s of ${seconds} s): it may time out on a slower runner.`);
   }
   return out;
 }
@@ -197,7 +206,12 @@ export function main(argv, deps = {}) {
     return 2;
   }
   if (engine === 'opengrep') report = normaliseOpengrepReport(report);
-  for (const line of timeLines(report, limit.seconds)) log(line);
+  try {
+    for (const line of timeLines(report, limit.seconds)) log(line);
+  } catch {
+    // The time lines are advice. A report shape they cannot read must never stop the ratchet (it once crashed with exit 1 where Docker exited 2).
+    log('semgrep-ccv3: time data unreadable, so no TIMEOUT or slowest-file line. The ratchet still runs.');
+  }
   const reportFile = o.report ?? path.join((deps.tmp ?? (() => mkdtempSync(path.join(tmpdir(), 'semgrep-ccv3-'))))(), 'report.json');
   writeFileSync(reportFile, JSON.stringify(report));
   const args = ['--tool', 'semgrep', '--report', reportFile, '--baseline', deps.baseline ?? BASELINE];
