@@ -135,13 +135,14 @@ after(async () => {
 describe('inbox --wait: what wakes it', () => {
   it('W1: a direct message wakes it: exit 0, one line with event id, sender and kind, and no body', async () => {
     const c = newCase('w1');
-    const id = await ev({ from: c.peer, to: c.me, board: c.board, body: 'SECRET-BODY-W1' });
+    // A DM of ANY kind, with a lane id: it must not depend on the say filter (kind note, no lane id).
+    const id = await ev({ from: c.peer, to: c.me, board: c.board, kind: 'handoff', lane: 'some-lane', body: 'SECRET-BODY-W1' });
     const r = lane(c, ['inbox', '--wait', '--timeout', '30'], { extra: FAST });
     assert.equal(r.code, 0, r.err);
     const m = WAIT_LINE.exec(r.out.trim());
     assert.ok(m, `one wait line, got: ${JSON.stringify(r.out)}`);
     assert.equal(m[1], id);
-    assert.equal(m[2], 'note');
+    assert.equal(m[2], 'handoff');
     assert.ok(!r.out.includes('SECRET-BODY-W1'), 'the body is not printed');
     assert.equal(r.out.trim().split('\n').length, 1);
   });
