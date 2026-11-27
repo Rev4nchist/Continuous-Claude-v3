@@ -111,6 +111,30 @@ test('a wrapper build line and no build:raw at all is a finding', () => {
   assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
 });
 
+// Seat ruling B, item 1 changed (07:03 CST): read the line that RUNS. build:raw counts only behind the wrapper. A plain build line with no flag
+// is a finding even when build:raw holds the flag (the real build runs the plain line and drops the tracer).
+test('a plain esbuild build line with no flag is a finding even when build:raw holds the flag (the line that runs decides)', () => {
+  const dir = hooksDirScripts({ build: 'esbuild src/*.ts --bundle', 'build:raw': BUILD_OK }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+test('a package.json with no build line at all is a finding, even when build:raw holds the flag', () => {
+  const dir = hooksDirScripts({ 'build:raw': BUILD_OK }, allMarked(5));
+  const f = traceMarkerFindings({ hooksDir: dir, names: names(5), minCount: 5 });
+  assert.ok(f.some((x) => x.kind === 'trace-inject-missing'), JSON.stringify(f));
+});
+
+test('buildLineThatRuns is build:raw behind the wrapper and build otherwise (one helper for every reader)', async () => {
+  const mod = await import('./trace-marker-check.mjs');
+  assert.equal(typeof mod.buildLineThatRuns, 'function', 'trace-marker-check.mjs must export buildLineThatRuns');
+  assert.equal(mod.buildLineThatRuns({ build: WRAPPER_LINE, 'build:raw': BUILD_OK }), BUILD_OK);
+  assert.equal(mod.buildLineThatRuns({ build: BUILD_OK }), BUILD_OK);
+  assert.equal(mod.buildLineThatRuns({ build: 'esbuild src/*.ts', 'build:raw': BUILD_OK }), 'esbuild src/*.ts');
+  assert.equal(mod.buildLineThatRuns({ build: WRAPPER_LINE }), '', 'the wrapper with no build:raw runs nothing');
+  assert.equal(mod.buildLineThatRuns({}), '');
+});
+
 test('a dist with the boot call counts toward the floor only once it has both', () => {
   const dists = { ...allMarked(3), h3: `var m = "${TRACE_MARKER}";
 `, h4: `var m = "${TRACE_MARKER}";
