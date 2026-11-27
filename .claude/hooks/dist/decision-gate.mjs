@@ -3015,7 +3015,12 @@ function isInert(parsed) {
       if (env ? !SAFE_ENV_NAME_CI.test(n) : !SAFE_ENV_NAME.test(n) && ENV_NAME_UNSAFE.test(n)) return false;
     }
   }
+  if (hasMemberCall(parsed)) return false;
   return all.every((c) => carrierFree(c) && (onDataList(c) || readsNamedCall(c)));
+}
+var MEMBER_CALL_KIND = "InvokeMemberExpressionAst";
+function hasMemberCall(parsed) {
+  return Object.values(parsed.byDialect).some((r) => r !== void 0 && r !== null && r.kinds.includes(MEMBER_CALL_KIND));
 }
 function notInertDenies(parsed, resolved) {
   if (!parsed || isStandaloneCleanup(parsed.text)) return [];
@@ -3027,6 +3032,7 @@ function notInertDenies(parsed, resolved) {
   return [deny("not-inert", notInertWhy(), denyClass || skippedFileHoldsGuarded(parsed) ? "other" : "push")];
 }
 function splicedOk(parsed) {
+  if (hasMemberCall(parsed)) return false;
   for (const r of Object.values(parsed.byDialect)) for (const c of r ? r.calls : []) {
     const p = bareProg(c);
     if (p === null || !(INERT_PROGRAMS.has(p) || p === "gh")) return false;

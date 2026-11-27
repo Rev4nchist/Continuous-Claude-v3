@@ -1503,7 +1503,17 @@ export function isInert(parsed: Deps['parsed']): boolean {
       if (env ? !SAFE_ENV_NAME_CI.test(n) : !SAFE_ENV_NAME.test(n) && ENV_NAME_UNSAFE.test(n)) return false; // a write that changes what a later call runs or as whom
     }
   }
+  if (hasMemberCall(parsed)) return false;
   return all.every((c) => carrierFree(c) && (onDataList(c) || readsNamedCall(c)));
+}
+/**
+ * C2d 3b, kinds-only cut: a PowerShell member call (the AST kind InvokeMemberExpressionAst) runs a .NET method that the parse lists as no call, so a
+ * [scriptblock]::Create('...').Invoke() or [Diagnostics.Process]::Start('gh','pr merge 9') carries text or a program the call list never shows.
+ * Any member call in a text that names a guarded call is not inert. No member allowlist yet: the corpus cost of this cut decides whether one is needed.
+ */
+const MEMBER_CALL_KIND = 'InvokeMemberExpressionAst';
+function hasMemberCall(parsed: NonNullable<Deps['parsed']>): boolean {
+  return Object.values(parsed.byDialect).some((r) => r !== undefined && r !== null && r.kinds.includes(MEMBER_CALL_KIND));
 }
 /**
  * The closed-world backstop of V7.6, as Dave decided it. When the text names a guarded call (the detector reads three views: raw, quote-blanked, quote-removed), the command is
@@ -1526,6 +1536,7 @@ export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[
 }
 /** The spliced-only rule: every call of the parse is a data program (INERT_PROGRAMS) or gh. A call with no program name, a git, a shell, a runner or a carrier is not. */
 function splicedOk(parsed: NonNullable<Deps['parsed']>): boolean {
+  if (hasMemberCall(parsed)) return false; // C2d 3b: a member call can run the spliced text
   for (const r of Object.values(parsed.byDialect)) for (const c of r ? r.calls : []) { const p = bareProg(c); if (p === null || !(INERT_PROGRAMS.has(p) || p === 'gh')) return false; }
   return true;
 }
