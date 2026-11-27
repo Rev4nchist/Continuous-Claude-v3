@@ -199,7 +199,7 @@ describe('W5 no TIME token', () => {
 describe('W6 a text cut before the end', () => {
   it('prints the filled text whole after the marker, byte for byte, as the last output (20 KB)', () => {
     const lines = ['Head at TIME_S.'];
-    for (let i = 0; i < 900; i++) lines.push(`Row ${i} of the long word, padded with some plain words to make it long.`);
+    for (let i = 0; i < 320; i++) lines.push(`Row ${i} of the long word, padded with some plain words to make it long.`);
     lines.push('Last line ends here.');
     const text = `${lines.join('\n')}\n`;
     assert.ok(text.length > 20000);
@@ -211,6 +211,16 @@ describe('W6 a text cut before the end', () => {
     assert.ok(r.out.endsWith(expected), 'the text is the last output');
     assert.equal(r.out.split(MARKER).length, 2, 'one marker line');
     assert.equal(callsOf(c)[0][1], expected.replace(/\n+$/, ''));
+  });
+});
+
+describe('W6b a text too long for one command line', () => {
+  it('is refused: exit 2, nothing sent, no log', () => {
+    const c = newCase(`Word at TIME.\n${'a long plain line of words\n'.repeat(1200)}`);
+    const r = run(c, baseArgs(c));
+    assert.equal(r.code, 2);
+    assert.equal(callsOf(c).length, 0);
+    assert.equal(fs.existsSync(c.logFile), false);
   });
 });
 
