@@ -44,7 +44,12 @@ describe('withParsed (step 1 of the PR B port)', () => {
   it('H4: bad JSON, a non-object, a write tool and a missing command leave deps unchanged', async () => {
     for (const raw of ['{not json', '[]', 'null', JSON.stringify({ tool_name: 'Write', tool_input: { file_path: 'x.md', content: `git ${P}` } }), JSON.stringify({ tool_name: 'Bash', tool_input: {} })]) {
       const d = await withParsed(raw, base);
-      expect(d, raw).toBe(base);
+      // True floor (card coord-guard-deny-floor): withParsed also runs main's own parse and adds `floor`; the head's own parse adds nothing (no `parsed`, no `parseLate`), and every other key is the same object.
+      const { floor, ...rest } = d;
+      expect(floor, raw).toBeDefined();
+      expect(rest, raw).toEqual(base);
+      expect(d.parsed, raw).toBeUndefined();
+      expect(d.parseLate, raw).toBeUndefined();
     }
   });
   it('H4b: a parser that throws does not throw out of withParsed, and the failure stays visible in the result (rule F1 reads it in a later step)', async () => {

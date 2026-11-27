@@ -15,7 +15,7 @@
     "coordination-notification.ts": "76379963710d3b82353c37de43e7e7ba484df05b0c1996ae8ef98c4aba2ff75c",
     "coordination-release.ts": "67367601f55b6df348588447f3a55fc6f76c94bb70e990318a55c0175c89e609",
     "dc-config-guard.ts": "0626f183b185020008505da78a626735bc21d57f9f5c8ffb4499a3f40ca9a434",
-    "decision-gate.ts": "d48a3419d61e539953b771577e569bdbbb360e1956698b6e2379b2ea296ba183",
+    "decision-gate.ts": "65ee88f4b37e80b753da92f6f781784a09659cb7f8af9d74a7a5d0d9c68edc3d",
     "decision-ledger.ts": "5d105c51e29d3a206f218f0a12f27d6b2830bab2574adc6fc22095f9e1f164f8",
     "destructive-command-guard.ts": "ca854ecacf19c04cfee62e95d9513e93ba1061dc2efba0b4d0585e0056c266e6",
     "epistemic-reminder.ts": "8f17424db2cfebe548bcca4400512f2565947f2b090fab337495de0ffb4aa311",
@@ -40,6 +40,22 @@
     "lib/trace-boot.ts": "b5a3c1d77c447fdc620eb3c25f2eff8d1dc9cd6b575fad70b93f34c97974a875",
     "lib/transcript-parser.ts": "561e3b405f7b9e245a68c7d7a0a33dc397a6b58d1297c00b34901d3a2c81a785",
     "linear-branch-context.ts": "2606d2b4673e20578e60bda30bd1f973fa0f53f0572ca9c1bca71fa103eb9346",
+    "main-floor/decision-gate.ts": "a764c345b91ec47203273a16ae5d82ce35b1412e7c6fd607899528f12603da73",
+    "main-floor/pr-opened-review-loop.ts": "5481058dbf68130d289730f6b48ca5c0f937f7efc2db97941a196d6d1f926c6f",
+    "main-floor/shared/answer-paths-door.ts": "4437be60322326bce9214e7b9d6215ba68099a41203d96b5cc88de07513c1582",
+    "main-floor/shared/checkpoint-shapes.ts": "042064d29427b0f5d54e0554f60c338dbae1cd0867c2faff4a8b77dbb87b146f",
+    "main-floor/shared/decisions-store.ts": "0b330fb6de4f88d9d4bccb7bca5e51a0adf3a0471f24dce87e653df09fa284ee",
+    "main-floor/shared/doc-heredoc.ts": "8b21641c587f76b60828bca241f7fdeefbdb988fb5513f15c1114a5ece48c655",
+    "main-floor/shared/gh-open-prefix.ts": "26b6f1942105e1a1dbeecc21c4be5e847726a6e88024a21540b9c503576cf540",
+    "main-floor/shared/git-call.ts": "0cc724dbec4f1c13f95bc8d47961e7a96d8777a76368d702b42b35953709e77b",
+    "main-floor/shared/holdout-ids.ts": "e352c593479d3461ea2b6003f12b845b7ea6de963af44b1714e93f46cf2868f4",
+    "main-floor/shared/inert-quotes.ts": "53ce5691dc928bbeffccdf45a2dd93566230b164bc8a98e4bc6e5381a2cf65bf",
+    "main-floor/shared/mask-quotes.ts": "469d893578d531a2118ba436bc321a354f4d7909a644872a19a0833bd872de33",
+    "main-floor/shared/router-config.ts": "5756194e2200aa63303930360b5f148db0ede213574d724d0602e9fae2e08c7e",
+    "main-floor/shared/shell-ast.ts": "98b42ec73eafbc17b12ef1f1ece1ae708f2089f2c029279e897860115f4ac791",
+    "main-floor/shared/shell-judge.ts": "4604e935552da32d5abbe3618b91a9114a9e2d6024ca135780d7180fbd547a00",
+    "main-floor/shared/shell-tools.ts": "880b99cb17a91a4b3fcfeeddc2ebccd32ae71c29fdbe8c8d4583cdbf23de2a2a",
+    "main-floor/shared/tap-scope.ts": "d546b1060ceea5eae8b6ebc3c51ae71d4b9d7c3aca82d2e844f61ab878c04666",
     "mcp-activity-tracker.ts": "0ca80468de7242925b84036eee99e62fc531a78f860d7050fee1ba896eb246ed",
     "memory-awareness.ts": "cb2ed6aed56ebb09d5a0cec120643340ef06c07419b990b7b8350b51d20f4fd3",
     "msys-crash-capture.ts": "b465bbe4929fdcd3680e4e5860690720b502dc6012586fac872e4f69447f463d",
@@ -205,6 +221,21 @@
     "web-lookup-advisor.ts": "0ad144b1e18cfd5c3579ba666f868cd5ec231dd7a18833fa9bdd4819e12ee1e1"
   },
   "external": {
+    ".claude/hooks/src/main-floor/lib/answer-key.mjs": {
+      "sha256": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c"
+    },
+    ".claude/hooks/src/main-floor/lib/decisions.mjs": {
+      "sha256": "fde7fd26e44c7d98b68581e04e4ba3f3a76709020b44740661fed3643f372f29"
+    },
+    ".claude/hooks/src/main-floor/lib/file-lock.mjs": {
+      "sha256": "d7eb5d1a2106f9ade33806ad084d45b6aa727e267cca5ffcfbef3cfe0b275c41"
+    },
+    ".claude/hooks/src/main-floor/lib/holdout-ids.mjs": {
+      "sha256": "a8f80cb8f5c71450a533ccdaee9789d9789385f259d38705ef2a36c1df8f7fef"
+    },
+    ".claude/hooks/src/main-floor/lib/repo-identity.mjs": {
+      "sha256": "e0d573f05d6fe3dc403fe179f398fbef97c4c8273d2c58644c64e2a15357feb3"
+    },
     ".claude/hooks/src/shared/malicious-packages.json": {
       "sha256": "f429513a4e03be747f583e54ece80cf5d188e1214e2ecf920432f478e7a0155e"
     },

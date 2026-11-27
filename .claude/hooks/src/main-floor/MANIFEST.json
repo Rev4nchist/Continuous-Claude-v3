@@ -1,0 +1,171 @@
+{
+ "ref": "6c3e71a544d4bec6f43249b86de4c86fd5f37075",
+ "note": "Copy of main decision-gate.ts and its local imports. Only the listed edits differ from main. Checked by __tests__/main-floor-copy.test.ts.",
+ "files": [
+  {
+   "main": ".claude/hooks/src/pr-opened-review-loop.ts",
+   "copy": "pr-opened-review-loop.ts",
+   "sha256Main": "5481058dbf68130d289730f6b48ca5c0f937f7efc2db97941a196d6d1f926c6f",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/decision-gate.ts",
+   "copy": "decision-gate.ts",
+   "sha256Main": "c7ab9bc09fccc3674f50f6c58d72367305467a8a04cf231cb20105fa252e8eab",
+   "edits": [
+    {
+     "find": "'../../../scripts/github/lib/repo-identity.mjs'",
+     "replace": "'./lib/repo-identity.mjs'"
+    },
+    {
+     "find": "import { logGuardDecision, logGuardError } from './shared/guard-log.js';",
+     "replace": "const logGuardDecision = (..._args: unknown[]): void => undefined; // main-floor: no guard log write (the head writes its own row)\nconst logGuardError = (..._args: unknown[]): void => undefined; // main-floor: no guard log write"
+    },
+    {
+     "find": "// Auto-run only as a hook; VITEST imports the pure functions above.\nif (!process.env.VITEST) {\n  main().catch((err) => { logGuardError(HOOK, err); console.error('decision-gate: stdin could not be read; the call is allowed.'); console.log('{}'); });\n}\n",
+     "replace": "// main-floor: the auto-run block of main is removed (the floor is imported, never run as a hook)\nexport { main as floorMainNeverCalled };\n"
+    }
+   ]
+  },
+  {
+   "main": ".claude/hooks/src/shared/checkpoint-shapes.ts",
+   "copy": "shared/checkpoint-shapes.ts",
+   "sha256Main": "042064d29427b0f5d54e0554f60c338dbae1cd0867c2faff4a8b77dbb87b146f",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/answer-paths-door.ts",
+   "copy": "shared/answer-paths-door.ts",
+   "sha256Main": "1d33c55e339ba8bc457f66b7f1d0135b9e3121e8e2c87bdb4919f15d67a6c57b",
+   "edits": [
+    {
+     "find": "'../../../../scripts/github/lib/answer-key.mjs'",
+     "replace": "'../lib/answer-key.mjs'"
+    }
+   ]
+  },
+  {
+   "main": ".claude/hooks/src/shared/decisions-store.ts",
+   "copy": "shared/decisions-store.ts",
+   "sha256Main": "5dda47504756eff1a4b7b4b84acc061d2843a68c641a1e70c62504e6e57c1aaf",
+   "edits": [
+    {
+     "find": "'../../../../scripts/github/lib/decisions.mjs'",
+     "replace": "'../lib/decisions.mjs'"
+    }
+   ]
+  },
+  {
+   "main": ".claude/hooks/src/shared/holdout-ids.ts",
+   "copy": "shared/holdout-ids.ts",
+   "sha256Main": "0607a8e456a122b7a6fcee18ae01978bdc36abc3f97b2906ad63faabb3b4bdc2",
+   "edits": [
+    {
+     "find": "'../../../../scripts/github/lib/holdout-ids.mjs'",
+     "replace": "'../lib/holdout-ids.mjs'"
+    }
+   ]
+  },
+  {
+   "main": ".claude/hooks/src/shared/git-call.ts",
+   "copy": "shared/git-call.ts",
+   "sha256Main": "0cc724dbec4f1c13f95bc8d47961e7a96d8777a76368d702b42b35953709e77b",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/inert-quotes.ts",
+   "copy": "shared/inert-quotes.ts",
+   "sha256Main": "53ce5691dc928bbeffccdf45a2dd93566230b164bc8a98e4bc6e5381a2cf65bf",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/mask-quotes.ts",
+   "copy": "shared/mask-quotes.ts",
+   "sha256Main": "469d893578d531a2118ba436bc321a354f4d7909a644872a19a0833bd872de33",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/router-config.ts",
+   "copy": "shared/router-config.ts",
+   "sha256Main": "5756194e2200aa63303930360b5f148db0ede213574d724d0602e9fae2e08c7e",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/shell-tools.ts",
+   "copy": "shared/shell-tools.ts",
+   "sha256Main": "880b99cb17a91a4b3fcfeeddc2ebccd32ae71c29fdbe8c8d4583cdbf23de2a2a",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/shell-ast.ts",
+   "copy": "shared/shell-ast.ts",
+   "sha256Main": "98b42ec73eafbc17b12ef1f1ece1ae708f2089f2c029279e897860115f4ac791",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/shell-judge.ts",
+   "copy": "shared/shell-judge.ts",
+   "sha256Main": "4604e935552da32d5abbe3618b91a9114a9e2d6024ca135780d7180fbd547a00",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/tap-scope.ts",
+   "copy": "shared/tap-scope.ts",
+   "sha256Main": "3796dfbee98250099a73b04ad7166bf6abda1e499b8ee3ea9197e08bde0e8fb1",
+   "edits": [
+    {
+     "find": "'../../../../scripts/github/lib/repo-identity.mjs'",
+     "replace": "'../lib/repo-identity.mjs'"
+    }
+   ]
+  },
+  {
+   "main": ".claude/hooks/src/shared/gh-open-prefix.ts",
+   "copy": "shared/gh-open-prefix.ts",
+   "sha256Main": "26b6f1942105e1a1dbeecc21c4be5e847726a6e88024a21540b9c503576cf540",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shared/doc-heredoc.ts",
+   "copy": "shared/doc-heredoc.ts",
+   "sha256Main": "8b21641c587f76b60828bca241f7fdeefbdb988fb5513f15c1114a5ece48c655",
+   "edits": []
+  },
+  {
+   "main": "scripts/github/lib/repo-identity.mjs",
+   "copy": "lib/repo-identity.mjs",
+   "sha256Main": "e0d573f05d6fe3dc403fe179f398fbef97c4c8273d2c58644c64e2a15357feb3",
+   "edits": []
+  },
+  {
+   "main": "scripts/github/lib/answer-key.mjs",
+   "copy": "lib/answer-key.mjs",
+   "sha256Main": "49a0451170db358544ca66ddc35260463de2c1b19663a0ee85504d0bca1e972c",
+   "edits": []
+  },
+  {
+   "main": "scripts/github/lib/decisions.mjs",
+   "copy": "lib/decisions.mjs",
+   "sha256Main": "fde7fd26e44c7d98b68581e04e4ba3f3a76709020b44740661fed3643f372f29",
+   "edits": []
+  },
+  {
+   "main": "scripts/github/lib/holdout-ids.mjs",
+   "copy": "lib/holdout-ids.mjs",
+   "sha256Main": "a8f80cb8f5c71450a533ccdaee9789d9789385f259d38705ef2a36c1df8f7fef",
+   "edits": []
+  },
+  {
+   "main": "scripts/github/lib/file-lock.mjs",
+   "copy": "lib/file-lock.mjs",
+   "sha256Main": "d7eb5d1a2106f9ade33806ad084d45b6aa727e267cca5ffcfbef3cfe0b275c41",
+   "edits": []
+  },
+  {
+   "main": ".claude/hooks/src/shell-ast-walk.ps1",
+   "copy": "shell-ast-walk.ps1",
+   "sha256Main": "e75cb941647a46cc4860057df3662f4b07349abdb30959572b0eb73895aefbbb",
+   "edits": []
+  }
+ ]
+}

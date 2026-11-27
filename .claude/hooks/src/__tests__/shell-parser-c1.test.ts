@@ -277,9 +277,10 @@ describe('A3-U: a remote name is local when it is local in the payload folder or
     shipTap();
     expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), { throwIn: { dir: '/sub', code: 'ENOENT' } })).toBe('allow');
   });
-  it('A3-U6b (control): makeGit throws MissingCwdError for a folder that does not exist: the same, not local there', async () => {
+  it('A3-U6b (control, true floor): makeGit throws MissingCwdError for a folder that does not exist: main denies it (push-state-unknown), so the floor denies it', async () => {
     shipTap();
-    expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), { throwIn: { dir: '/sub', code: 'MISSING-CWD' } })).toBe('allow');
+    // TRUE FLOOR (card coord-guard-deny-floor): the head alone allowed this; main's own code, run as the floor on the same world, denies. The stricter verdict wins.
+    expect(await patIn(bash(`git -C sub push plain feat/x && ${PUSH}`), { throwIn: { dir: '/sub', code: 'MISSING-CWD' } })).toBe('push-state-unknown');
   });
   it('A3-U7 (control, as main): a throw in the payload folder itself counts as local, whatever the code', async () => {
     shipTap();

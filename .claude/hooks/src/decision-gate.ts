@@ -227,14 +227,15 @@ import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, join, posix, resolve } from 'path';
-import { isPrOpenCommand, isPrOpenText, joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
+import { joinContinuations, normalizeGh, squashQuotes } from './pr-opened-review-loop.js';
 import { CCV3_REPO, commandRepo, hasNonLiteralRepo, namedRepo, priorGhRepo } from './shared/checkpoint-shapes.js';
 import { answerKeyHitsOf } from './shared/answer-paths-door.js';
 import { decisionKey, decisionRead, decisionRows, decisionsPath } from './shared/decisions-store.js';
 import { countIdsIn, loadHoldoutIds } from './shared/holdout-ids.js';
 import { CALL_START, GLOBAL_OPT, PATH_PREFIX, VAL, gitCallRe, isGitToken, isSafeToken, safeCallRe } from './shared/git-call.js';
 import { logGuardDecision, logGuardError } from './shared/guard-log.js';
-import { blankInertQuotes, docAppendReadable, isDocAppend, isTextOnlyCommand } from './shared/inert-quotes.js';
+import * as mainFloor from './main-floor/decision-gate.js';
+import { blankInertQuotes, isTextOnlyCommand } from './shared/inert-quotes.js';
 import { maskQuoted, quotedSpans } from './shared/mask-quotes.js';
 import { routerFlag } from './shared/router-config.js';
 import { readShellCommand, mayRunUnderCmd } from './shared/shell-tools.js';
@@ -302,7 +303,20 @@ export interface Deps {
   parseOpts?: ParseOpts;
   /** The time budget of the whole parse in withParsed, in ms (CodeRabbit CLI run 1 finding 2). Absent: 7000. Past it there is no `parsed` and the hand reader decides. */
   parseBudgetMs?: number;
+  /**
+   * Card coord-guard-deny-floor (true floor): main's own gate (src/main-floor, a proved copy of main's decision-gate.ts) run on the raw payload by withParsed, with main's own parse.
+   * `deps` are the floor's deps after its parse; `failed` says why the floor could not answer (it threw or answered late). decide() takes the stricter of its own verdict and the floor's.
+   * Absent (a test that calls decide with no withParsed): no floor.
+   */
+  floor?: { deps?: FloorDeps; failed?: string };
+  /** The deps the floor starts from. realDeps sets main's own realDeps. Absent (tests): the deps of the call, with this head's parse and seams taken out. */
+  floorBase?: FloorDeps;
+  /** A seam for the tests of the floor: another decide or withParsed in place of main's copy (a floor that throws). Absent: the copy. */
+  floorImpl?: FloorImpl;
 }
+export type FloorDeps = Parameters<typeof mainFloor.withParsed>[1];
+export interface FloorImpl { withParsed: (raw: string, deps: FloorDeps) => Promise<FloorDeps>; decide: (input: HookInput, deps: FloorDeps) => Decision }
+export const FLOOR_IMPL: FloorImpl = { withParsed: mainFloor.withParsed, decide: mainFloor.decide as unknown as FloorImpl['decide'] };
 /**
  * Which flag decides a deny: `push` is decisions.enforcePush, `other` is decisions.enforce, `app-push` is a push in a covered folder
  * (denies unless decisions.enforceAppPush is false, and then only its tap path warns: Dave 11-13, hard denies always deny).
@@ -726,8 +740,6 @@ interface Shape {
   tail?: string;
   /** Seat item 3: the payload tool is PowerShell (a backslash is literal there). */
   pwsh?: boolean;
-  /** The deny floor: a shape of the hand pass (main's reader). It has no parser read, so judgeCreate reads its head with createRead, as main does. */
-  hand?: true;
   /** Port step 3, a create only: the head and base the parser read from the call's words. Absent: the hand reader reads the tail. */
   read?: CreateRead;
 }
@@ -2444,256 +2456,14 @@ const landId = (shape: Shape, at: Where, own: Own, prior: Prior): string =>
 /** The folders a segment may run in, one `Where` per distinct reading of the cds before it. */
 const distinctWheres = (wheres: Where[]): Where[] => wheres.filter((w, i) => wheres.findIndex((o) => whereId(o) === whereId(w)) === i);
 
-// ---------- the deny floor (card coord-guard-deny-floor, Dave 11-27, seat plan GO) ----------
-// Main's raw reader stays as a floor. shapesOf lists the shapes of the hand pass (main's own code, verbatim, below) AND the shapes of the parser pass; judge denies
-// when any shape denies. A parser allow can never override a hand deny, so no call that main denies is allowed here by construction.
-// The restored definitions are copied from main 58a81f4a without an edit. Two stricter regexes stay as the C2d step 4 made them (LAND_PR_RE, CLEANUP_RE):
-// they only add denies to the hand reader. The hand pass keeps main's doc-append rule (docAppendByAstFloor) so the floor exempts nothing that main did not.
-
-const API_CMD_RE = /\bgh\s+api\b/i;
-
-const CLI_CREATE_RE = /\bgh\s+pr\s+(?:create|new)\b/i;
-
-const CREATE_CHAR_WHY = 'a character whose effect this gate cannot read the same way in bash and PowerShell (outside quotes only letters, digits, - _ . / = : and spaces; no $, backtick or backslash in double quotes; no redirect, &, non-ASCII or CR)';
-
-/**
- * Seat delta q3: what may stand before the gh word of a merge or create in its own command: nothing, or literal NAME=value settings
- * (GH_REPO=..., GH_PROMPT_DISABLED=1). A wrapper (bash -c, pwsh -Command, cmd /c, a here-string, sudo, time) runs gh through another parser.
- */
-const GH_PREFIX_OK = /^\s*(?:[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_\-./:]*\s+)*$/;
-
-const TAIL_API_RE = /\bgh\s+api\b[\s\S]*$/i;
-
-const TAIL_CLI_RE = /\bgh\s+pr\s+merge\b([\s\S]*)$/i;
-
-/** `gh api .../pulls <args>`: fields only from the known keys; an unknown word, --input, a head or base from a file (=@) or head_repo is bad. */
-function apiCreateRead(rest: string, pwsh: boolean): CreateRead {
-  const words = pairedWords(rest, pwsh);
-  if (words === null) return BAD('an unpaired quote');
-  return apiCreateOfWords(words);
-}
-
-/**
- * `gh api .../pulls/<n>/merge <args>`: the head is the value of the `sha` field, and nothing else. The value of another field
- * (commit_message="sha=...") is never read. An unknown word, --input or an unpaired quote is bad.
- */
-function apiMergeHead(text: string, pwsh = false): MergeHead {
-  const rest = text.replace(/^[\s\S]*?\bapi\b/, '');
-  // gh's own placeholders ({owner}, {repo}, {branch}) hold no comma, so bash does not expand them, and they make one word in PowerShell.
-  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return UNREAD_HEAD;
-  const words = pairedWords(rest, pwsh);
-  if (words === null) return UNREAD_HEAD;
-  return apiHeadOfWords(words);
-}
-
-/** `gh pr create|new <args>`: every word is a known flag or a value of one. -F is --body-file. */
-function cliCreateRead(args: string, pwsh: boolean): CreateRead {
-  const words = pairedWords(args, pwsh);
-  if (words === null) return BAD('an unpaired quote');
-  return cliCreateOfWords(words);
-}
-
-/**
- * `gh pr merge <args>`: the head is the value of --match-head-commit (space or =), and nothing else. Any flag outside the known set, a
- * value flag with no value or an unpaired quote is bad: the reader cannot tell what gh will take as the head. Positionals are not read.
- */
-function cliMergeHead(args: string, pwsh = false): MergeHead {
-  if (unmodelled(args, pwsh)) return UNREAD_HEAD;
-  const words = pairedWords(args, pwsh);
-  if (words === null) return UNREAD_HEAD;
-  return cliHeadOfWords(words);
-}
-
-/**
- * The head and base a create names, from the raw tail of its command (rawTail: up to the next ; | newline or && outside quotes, so a
- * head after 2>&1 is in it). The reader is the one of the EARLIER gh call: a quoted title that names gh pr new does not make an api create
- * a CLI one. A create that only the quotes-deleted view shows, or a text the allowlist refuses (unmodelled), is bad. gh's
- * {owner}/{repo}/{branch} placeholders are allowed, as in the merge read.
- */
-function createRead(text: string, pwsh = false): CreateRead {
-  const cli = CLI_CREATE_RE.exec(text);
-  const api = API_CMD_RE.exec(text);
-  const isCli = cli !== null && (api === null || cli.index < api.index);
-  const m = isCli ? cli : api;
-  if (m === null) return BAD('the create can only be read with its quotes deleted');
-  if (!GH_PREFIX_OK.test(text.slice(0, m.index))) return BAD('the gh call is run by another program (a wrapper such as bash -c, pwsh -Command or cmd /c), which reads the words again');
-  const rest = text.slice(m.index + m[0].length);
-  if (unmodelled(rest.replace(/\{(?:owner|repo|branch)\}/g, 'x'), pwsh)) return BAD(CREATE_CHAR_WHY);
-  return isCli ? cliCreateRead(rest, pwsh) : apiCreateRead(rest, pwsh);
-}
-
-/** The land and merge shapes of ONE command segment (no && ; | or newline in it), with the PR and the sha read from that segment alone. */
-function landShapesOf(seg: string, textOnly = false, rawSeg = seg, tail = rawSeg, pwsh = false): Shape[] {
-  const out: Shape[] = [];
-  // The land script pins its own head: its sha is read as before (round 3 C2 changes only the merge read).
-  const sha = SHA_RE.exec(seg)?.[1]?.toLowerCase() ?? null;
-  // textOnly: the whole command only prints or reads text (isTextOnlyCommand), so the script name is a mention. A mention that names a PR (-Pr 12) stays a land shape.
-  const pr = lastArg(seg, LAND_PR_RE);
-  if (LAND_SCRIPT_RE.test(seg) && !CLEANUP_RE.test(seg) && !(textOnly && pr === null)) out.push({ kind: 'land', pr, sha });
-  const cli = MERGE_CLI_RE.exec(seg);
-  // Round 3 C2: the head is read from the RAW segment, whose quotes are what gh gets. When only the quotes-deleted view shows the merge
-  // (quotes inside its words), the head cannot be read whole: fail closed. Seat ruling A: the words are read from the raw TAIL (the text up
-  // to the next ; | newline or && outside quotes), not from the segment cut at every & and CR, so a head after 2>&1 is read too.
-  // Seat delta q3: the gh word must open its command (only literal NAME=value settings before it), else another program parses the words.
-  const opens = (m: RegExpExecArray | null): RegExpExecArray | null => (m !== null && GH_PREFIX_OK.test(tail.slice(0, m.index)) ? m : null);
-  const rawCli = MERGE_CLI_RE.exec(rawSeg) ? opens(TAIL_CLI_RE.exec(tail)) : null;
-  if (cli) out.push({ kind: 'merge', pr: lastArg(cli[1], /(?:^|\s)(?:["']?)(\d+)(?=\s|["']|$)/) ?? lastArg(cli[1], /\/pull\/(\d+)/), ...(rawCli ? cliMergeHead(rawCli[1], pwsh) : UNREAD_HEAD) });
-  const api = MERGE_API_RE.exec(seg);
-  const rawApi = MERGE_API_RE.exec(rawSeg) ? opens(TAIL_API_RE.exec(tail)) : null;
-  if (api && !GET_RE.test(api[0])) out.push({ kind: 'merge', pr: api[1], ...(rawApi ? apiMergeHead(rawApi[0], pwsh) : UNREAD_HEAD) });
-  return out;
-}
-
-/**
- * Round 3 C2 and C1, seat ruling A (an allowlist, not a list of bad characters): true unless every character of the text is one whose
- * effect the reader models the same way in bash and PowerShell. A character not on the list makes the head unread.
- *   - outside quotes: ASCII letters, digits, space, tab, - _ . / = : and the two quote characters. An @ inside a word (body=@file) is
- *     literal in both shells; an @ that opens a word is a PowerShell splat, so it is refused.
- *   - inside '...': printable ASCII and a newline (literal in both shells; '' splits the same in both).
- *   - inside "...": the same but $, a backtick and a backslash (bash expands $ and escapes with \, PowerShell with a backtick).
- *   - anywhere: a non-ASCII character (a curly quote is a quote for PowerShell, NBSP and the Unicode spaces are word characters for bash),
- *     a CR, \v and \f. An open quote at the end is refused by pairedWords, the next step of every reader.
- * So a redirect (< >), a lone &, # (a comment), $, a backtick, a backslash, a glob, a brace, a paren and a comma outside quotes are refused.
- */
-function unmodelled(text: string, pwsh = false): boolean {
-  let q = '';
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    // Seat item 3: a backslash next to a quote is refused in every tool (a native program can read \" as an escaped quote).
-    if (ch === '\\' && (QUOTE_CH.has(text[i - 1] ?? '') || QUOTE_CH.has(text[i + 1] ?? ''))) return true;
-    if (q === "'") { if (ch === "'") q = ''; else if (!QUOTED_OK.test(ch)) return true; continue; }
-    if (q === '"') { if (ch === '"') q = ''; else if (!QUOTED_OK.test(ch) || '$`'.includes(ch) || (ch === '\\' && !pwsh)) return true; continue; }
-    if (ch === "'" || ch === '"') { q = ch; continue; }
-    if (ch === '@' && i > 0 && !/[ \t]/.test(text[i - 1])) continue;
-    if (ch === '\\' && pwsh) continue; // seat item 3: literal in PowerShell; the Bash tool refuses it (an escape)
-    if (!BARE_OK.test(ch)) return true;
-  }
-  return false;
-}
-
-/**
- * The whole command is PowerShell and only appends literal text to literal document files: it runs nothing, so a guarded word in the text is
- * a mention. Read from the parse (every call is an append; no redirect outside a string). The caller still keeps a PR number in the raw text
- * as a land shape. DENY FLOOR: main's own rule, kept verbatim for the hand pass (the parser pass uses docAppendByAst, which also lets a folder change or a clock read lead).
- */
-function docAppendByAstFloor(parsed: Deps['parsed'], tool: string | undefined, raw: string): boolean {
-  if (tool !== 'PowerShell' || !parsed || DOC_ODD_CHAR.test(raw)) return false;
-  const dialects = Object.keys(parsed.byDialect);
-  const r = parsed.byDialect.pwsh;
-  if (dialects.length !== 1 || !r || r.errors.length > 0 || r.calls.length === 0) return false;
-  return !hasBareRedirect(parsed.text, r) && r.calls.every(docAppendCall);
-}
-
 /**
  * The shapes of one command text (continued lines joined, both shells read). EVERY create, land and merge shape is returned, one per segment:
  * the text is split on && ; | and newlines, and each segment is read alone, so a tap for the first PR does not cover the second.
  * Each shape also carries where it runs: the cds before its segment, read under the Bash mask AND the PowerShell mask (a \" escapes in one
  * and not in the other, so each mask can hide a cd the other shows). The readings (bash, pwsh, quotes deleted) are united and de-duplicated,
  * and the cds are part of the id: the same shape in two folders is two shapes. An extra shape only makes the gate stricter.
- */
-function shapesOfHand(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] {
-  const parserOnly = false; // the hand pass of main: the hand readers run; the parser adds its merge and create shapes, as main does in production
-  // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
-  const text = normalizeGh(blankInertQuotes(raw, tool));
-  const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
-  // A read or print command that only names the land script is text. Only for the tools whose quote rules we read (Bash, PowerShell):
-  // Desktop Commander may run cmd.exe. All three readings of the raw text must be text-only (a continuation can differ between shells).
-  // A PR number anywhere in the raw text (class B) keeps the land shape. It is read from the RAW text, with no space needed before -Pr:
-  // an inert head blanks a quoted "-Pr 12", and LAND_PR_RE (which needs a space before -Pr) misses `"-Pr 12"`.
-  const textOnly = (tool === 'Bash' || tool === 'PowerShell')
-    && !PR_NUMBER_IN_TEXT_RE.test(raw)
-    && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every(isTextOnlyCommand);
-  // Lane coord-guard-text-false-refusal: a segment that only APPENDS text to one literal .md, .txt or .log file (isDocAppend) runs nothing, so the script name in its
-  // value is a mention too. The whole command must read plain under every reading, and a PR number anywhere in the raw text keeps the land shape (as above).
-  // Any other segment of the same command is judged alone, as before. Seat ruling 2026-11-23 12:48 CST: single-quoted values only, no new tokenizer.
-  const docReadable = !PR_NUMBER_IN_TEXT_RE.test(raw)
-    && [raw, joinContinuations(raw, 'bash'), joinContinuations(raw, 'pwsh')].every((c) => docAppendReadable(c, tool));
-  // Port step 4 (PB-7): the AST rule. It widens the exemption only (double-quoted and here-string values, an ac or sc alias, a target set by one assignment).
-  const docAst = !PR_NUMBER_IN_TEXT_RE.test(raw) && docAppendByAstFloor(parsed, tool, raw);
-  const out: Shape[] = [];
-  // Seat item 3: the tool decides one fact of the merge and create readers (a backslash is literal in PowerShell).
-  const pwshTool = tool === 'PowerShell';
-  const seen = new Set<string>();
-  const add = (shape: Shape, id: string): void => { if (!seen.has(id)) { seen.add(id); out.push(shape); } };
-  let created = false;
-  // C2a: the mention exemption of the hand reader, and the parser's land, merge and create calls (used in place of the hand regexes when parserOnly).
-  const exempt = textOnly || docAst;
-  const astItems = parserOnly ? astItemsOf(parsed, raw, exempt, text) : [];
-  const heldItems = new Set<AstItem>();
-  const astHolds = (s: string, create: boolean): AstItem[] => { const sq = squashed(s); const hit = astItems.filter((i) => (i.create === true) === create && sq.includes(i.sq)); hit.forEach((i) => heldItems.add(i)); return hit; };
-  for (const view of views) {
-    const reads = (['Bash', 'PowerShell'] as const).map((tool) => { const masked = maskQuoted(view, tool); return { masked, pos: cdPositions(masked, view) }; });
-    for (const { seg, from } of cmdSegments(view)) {
-      const wheres = distinctWheres(reads.map((r) => whereAt(r.pos, from)));
-      const owns = reads.map(({ masked }) => ownCommand(view, masked, from));
-      const prior = priorOf(view, reads.map((r) => r.masked), from);
-      // Seat delta q3: a segment that starts inside a quote of the whole text (a here-string line, a quoted -c payload) is text that
-      // another program may run: its tail is empty, so every head read from it is unread.
-      const tail = quoteOpenAt(view, from, pwshTool) ? '' : rawTail(view.slice(from));
-      for (const s of new Set([seg, squashQuotes(seg)])) {
-        const found = parserOnly ? astHolds(s, false).flatMap((i) => (i.shape ? [i.shape] : [])) : landShapesOf(s, textOnly || docAst || (docReadable && isDocAppend(seg)), seg, tail, pwshTool);
-        for (const shape of found) {
-          for (const own of owns) for (const at of wheres) add({ ...shape, at, ...own, prior }, landId(shape, at, own, prior));
-        }
-      }
-      const heldCreates = parserOnly ? astHolds(seg, true) : [];
-      if (parserOnly ? heldCreates.length === 0 : !isPrOpenText(seg)) continue;
-      created = true;
-      // parserOnly: the parser's read of the create in this segment; a read that cannot be trusted (bad) wins over another one in the same segment.
-      const held = heldCreates.find((h) => h.read?.bad) ?? heldCreates[0];
-      for (const own of owns) for (const at of wheres) add({ kind: 'create', pr: null, at, ...own, prior, tail, pwsh: pwshTool, ...(held?.read ? { read: held.read } : {}) }, `create|${whereId(at)}|${own.text}${fullId(own)}${priorId(prior)}|${tail}`);
-    }
-  }
-  // parserOnly: a merge or land item that no single segment holds (a word split over lines: `gh pr` + newline + `merge`) is judged in the cwd and in every folder of the cds.
-  if (parserOnly) {
-    const loose = astItems.filter((i) => i.create !== true && i.shape && !heldItems.has(i));
-    if (loose.length > 0) {
-      const view = views[0];
-      const masked = maskQuoted(view, 'Bash');
-      for (const i of loose) for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-        add({ ...(i.shape as Shape), at, text: view, mtext: masked, ftext: view, fmtext: masked, prior: NO_PRIOR, pwsh: pwshTool }, `loose|${i.shape?.kind}|${i.shape?.pr}|${whereId(at)}|${i.sq}`);
-      }
-    }
-  }
-  // A create that no single segment shows (`gh pr` + newline + `create`): judge the whole text in the cwd and in every folder of the cds.
-  // parserOnly: the same fallback for a create item that no single segment holds (the parser's read, or a bad read for a split word, goes with it).
-  const looseCreate = parserOnly ? astItems.filter((i) => i.create === true) : [];
-  if (!created && (parserOnly ? looseCreate.length > 0 : isPrOpenCommand(text))) {
-    const view = views[0];
-    const masked = maskQuoted(view, 'Bash');
-    const read = looseCreate.find((i) => i.read?.bad)?.read ?? looseCreate[0]?.read;
-    for (const at of [{ cds: [], unknown: false, loose: false }, whereAt(cdPositions(masked, view), view.length)]) {
-      add({ kind: 'create', pr: null, at, text: view, mtext: masked, ftext: view, fmtext: masked, tail: view, pwsh: pwshTool, ...(read ? { read } : {}) }, `create|${whereId(at)}|${view}`);
-    }
-  }
-  const withMergesAndCreates = withAstCreates(withAstMerges(out, parsed, pwshTool), parsed, pwshTool);
-  // C2a: a parser land shape that the hand reader already has (same PR, same sha) adds nothing; any other one is one more shape.
-  const seenLand = new Set(withMergesAndCreates.filter((s) => s.kind === 'land').map((s) => `${s.pr}|${s.sha}`));
-  // Union mode (the hand reader runs): the hand land shapes already cover every form of the corpus, so the parser adds none (no new deny, no regression of a
-  // hand exemption such as a doc append next to a Set-Location). The parser land shapes decide alone under parserOnly, the state C2b makes real.
-  const lands = (parserOnly ? astLandShapes(parsed, raw, exempt, text, pwshTool) : []).filter((s) => { const k = `${s.pr}|${s.sha}`; if (seenLand.has(k)) return false; seenLand.add(k); return true; });
-  return [...withMergesAndCreates, ...lands, ...pushShapesOf(raw, tool)];
-}
-
-/**
- * The shapes of a raw shell text: the hand pass (main's reader, the floor) plus the parser pass. Push shapes come once, from the parser pass (pushShapesOf reads raw).
- * A shape the two passes both list (the parser's merge and create shapes, which main also adds) is kept once.
  */
 function shapesOf(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] {
-  const parser = shapesOfParser(raw, tool, parsed);
-  const seen = new Set(parser.map((s) => JSON.stringify(s)));
-  const hand = shapesOfHand(raw, tool, parsed).filter((s) => s.kind !== 'push').map((s): Shape => ({ ...s, hand: true }));
-  return [...parser, ...hand.filter((s) => { const k = JSON.stringify(s); const dup = seen.has(k.replace(',"hand":true', '')) || seen.has(k); seen.add(k); return !dup; })];
-}
-
-/**
- * The shapes of one command text (continued lines joined, both shells read). EVERY create, land and merge shape is returned, one per segment:
- * the text is split on && ; | and newlines, and each segment is read alone, so a tap for the first PR does not cover the second.
- * Each shape also carries where it runs: the cds before its segment, read under the Bash mask AND the PowerShell mask (a \" escapes in one
- * and not in the other, so each mask can hide a cd the other shows). The readings (bash, pwsh, quotes deleted) are united and de-duplicated,
- * and the cds are part of the id: the same shape in two folders is two shapes. An extra shape only makes the gate stricter.
- */
-function shapesOfParser(raw: string, tool?: string, parsed?: Deps['parsed']): Shape[] {
   // The words of a create, land or merge inside the quoted text of a harmless command (lane add --title "gh pr create", echo, commit -m) are text. Push is read from raw below.
   const text = normalizeGh(blankInertQuotes(raw, tool));
   const views = [...new Set([joinContinuations(text, 'bash'), joinContinuations(text, 'pwsh')])];
@@ -3534,10 +3304,10 @@ const ALLOW: Decision = { action: 'allow' };
 function judgeCreate(s: Shape, deps: Deps, dir: string, cmd: CmdRepo): Decision {
   const route = routeOf(deps, dir, cmd);
   // Round 3 C1 (seat ruling A): both paths read the head from the raw tail, not from the &-cut text.
-  if (route === 'app') return judgeAppCreate(s.tail ?? s.ftext ?? s.text!, s.pwsh === true, deps, dir, cmd, s.read ?? (s.hand === true ? createRead(s.tail ?? s.ftext ?? s.text!, s.pwsh === true) : undefined));
+  if (route === 'app') return judgeAppCreate(s.tail ?? s.ftext ?? s.text!, s.pwsh === true, deps, dir, cmd, s.read);
   if (route === 'foreign') return deny('repo-foreign', goThereWhy(cmd.repo!));
   // G4: the CCv3 head is read from the base cut (any & ends it), as in base main 7a0e2f34. Round 3 C1: from one known place, once.
-  const cr = s.read ?? (s.hand === true ? createRead(s.tail ?? s.text!, s.pwsh === true) : NO_READ);
+  const cr = s.read ?? NO_READ;
   if (cr.bad !== null) return deny('head-unresolved', createBadWhy(dir, cr.bad));
   if (cr.heads.length > 1) return deny('head-unresolved', createBadWhy(dir, `two head values (${cr.heads.join(', ')}); gh takes the last`));
   const branch = readBranch(cr.heads[0] ?? null, deps, dir);
@@ -4533,6 +4303,34 @@ function judge(input: HookInput, deps: Deps, notes: Set<string>, sink: Deny[]): 
  * seen in a folder outside CCv3, is an allow with `notice` (S5; a corrupt one is the registry-corrupt deny: seat review 1, item 4).
  */
 export function decide(input: HookInput, deps: Deps, found: Deny[] = []): Decision {
+  const d = decideHead(input, deps, found);
+  return d.action === 'deny' || deps.floor === undefined ? d : withFloor(d, input, deps);
+}
+
+/**
+ * The true floor (card coord-guard-deny-floor, Dave 11-27 "True floor, one round"): the verdict is the stricter of the head's and main's own. A head deny stays as it is.
+ * The floor reads the decision store, the router config and local git as main does; it consumes no tap and writes no log (its two log calls are no-ops in the copy).
+ * A floor that threw or answered late denies a gated call that the head allows, and allows an ungated one (as unjudgeable() does); the head writes one log row either way.
+ */
+function withFloor(d: Decision, input: HookInput, deps: Deps): Decision {
+  const f = deps.floor as NonNullable<Deps['floor']>;
+  let why = f.failed;
+  if (why === undefined && f.deps !== undefined) {
+    try {
+      const fd = (deps.floorImpl ?? FLOOR_IMPL).decide(input, f.deps);
+      if (fd.action === 'deny') return fd;
+      if (fd.warn !== undefined && d.action === 'allow' && d.warn === undefined) return { ...d, warn: fd.warn, scope: fd.scope };
+      return d;
+    } catch (err) { why = String((err as Error)?.message ?? err).slice(0, 160); }
+  }
+  try { logGuardError(HOOK, new Error(`main-floor failed: ${why ?? 'no floor deps'}`)); } catch { /* the log never blocks */ }
+  let gated = true;
+  try { gated = gatedScopesSafe(input, false, deps.parsed).size > 0 || storeWriteCall(input, deps); } catch { /* a throw while judging counts as gated */ }
+  if (!gated) return d;
+  return { action: 'deny', pattern: 'main-floor-error', scope: 'other', reason: 'BLOCKED (decision-gate): the check that holds the rules of main could not run on this call, so it is not allowed. Run the command again. If it keeps failing, ask Dave.' };
+}
+
+function decideHead(input: HookInput, deps: Deps, found: Deny[] = []): Decision {
   const notes = new Set<string>();
   const call = perCall(deps);
   CWDS.set(call, input.cwd || process.cwd());
@@ -4920,6 +4718,8 @@ export function realDeps(opts: { start?: number } & Pick<GitOptions, 'now' | 'sp
     // The push scan: the ids come from the primary checkout of the folder being pushed (the dataset is git-ignored, so a worktree has none).
     holdoutIds: (dir) => loadHoldoutIds(primaryRootOf(makeGit(run), dir)),
     answerKeyHits: answerKeyHitsOf,
+    // The true floor starts from main's own realDeps (its git runner, its clock, its registry reader), not from this head's.
+    floorBase: mainFloor.realDeps({ start: t0, ...run }),
   };
 }
 
@@ -4991,6 +4791,22 @@ function expandWrappers(r: ParseResult | undefined): ParseResult | undefined {
  * programs of the table above are unwrapped into the call they run.
  */
 export async function withParsed(raw: string, deps: Deps): Promise<Deps> {
+  // The two parses run side by side: the hook has 10 s, and each parse waits at most its own 7 s budget, so one after the other could pass the hook time.
+  const [head, floor] = await Promise.all([withHeadParsed(raw, deps), withFloorParsed(raw, deps)]);
+  return { ...head, floor: floor.floor };
+}
+
+/** The floor's own parse (main's parser and wrapper handling) of the raw payload. Nothing of this head's parse, shapes or test seams goes in. */
+async function withFloorParsed(raw: string, deps: Deps): Promise<Deps> {
+  const { parsed: _parsed, parseLate: _late, parseOpts: _opts, floor: _floor, floorBase: _base, floorImpl: _impl, ...plain } = deps;
+  void _parsed; void _late; void _opts; void _floor; void _base; void _impl;
+  try {
+    const f = await (deps.floorImpl ?? FLOOR_IMPL).withParsed(raw, (deps.floorBase ?? plain) as unknown as FloorDeps);
+    return { ...deps, floor: f.parseLate !== undefined ? { failed: 'the main-floor parse was late' } : { deps: f } };
+  } catch (err) { return { ...deps, floor: { failed: String((err as Error)?.message ?? err).slice(0, 160) } }; }
+}
+
+async function withHeadParsed(raw: string, deps: Deps): Promise<Deps> {
   let lateText: string | undefined; // C1 (B2): the raw text of a call whose parse ended late or threw
   try {
     const input: unknown = JSON.parse(raw.trim() || '{}');

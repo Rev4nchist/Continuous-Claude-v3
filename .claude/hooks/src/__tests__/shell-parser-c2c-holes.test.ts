@@ -138,11 +138,12 @@ describe('C: controls and the wrapper cost row', () => {
     landTap(12);
     expect(await verdict(`gh pr merge 12 --squash --match-head-commit ${HEAD}`)).toBe('allow');
   });
-  it('C05 (cost row) a tapped merge behind env is judged like the bare call: allowed with the tap, denied without', async () => {
+  it('C05 (cost row, true floor) a tapped merge behind env is denied, as main denies it: the wrapper gain of the C2c line is gone', async () => {
     const text = `env gh pr merge 12 --squash --match-head-commit ${HEAD}`;
     expect(denied(await verdict(text))).toBe(true);
     landTap(12);
-    expect(await verdict(text)).toBe('allow');
+    // TRUE FLOOR (card coord-guard-deny-floor, Dave 11-27 "True floor, one round"): main denies a merge behind a wrapper even with a tap, so the head denies it too.
+    expect(denied(await verdict(text))).toBe(true);
   });
 });
 
@@ -219,12 +220,10 @@ describe('D: a wrapper option that moves the directory, or changes how the progr
     landTap(7);
     expect(denied(await verdict(text)), text).toBe(true);
   });
-  it('(paired) the same wrappers with no such option are read through and allowed with the tap', async () => {
+  it('(paired, true floor) the same wrappers with no such option are denied even with the tap, as main denies them', async () => {
     landTap(7);
-    expect(await verdict(`env GH_PROMPT_DISABLED=1 ${MERGE}`)).toBe('allow');
-    expect(await verdict(`env NO_COLOR=1 TZ=UTC ${MERGE}`)).toBe('allow');
-    expect(await verdict(`timeout -k 5 60 ${MERGE}`)).toBe('allow');
-    expect(await verdict(`nice -n 5 ${MERGE}`)).toBe('allow');
+    // TRUE FLOOR (card coord-guard-deny-floor): the read-through of a wrapper was a gain of the C2c line over main; main denies, so the floor denies.
+    for (const text of [`env GH_PROMPT_DISABLED=1 ${MERGE}`, `env NO_COLOR=1 TZ=UTC ${MERGE}`, `timeout -k 5 60 ${MERGE}`, `nice -n 5 ${MERGE}`]) expect(denied(await verdict(text)), text).toBe(true);
   });
 });
 
@@ -241,9 +240,10 @@ describe('W: the wrapper table fails closed (a correct arity is judged like the 
     ['command', `command ${MERGE}`, `command FOO=1 ${MERGE}`],
     ['builtin', `builtin ${MERGE}`, `builtin FOO=1 ${MERGE}`],
   ];
-  it.each(table)('%s: the correct arity is allowed with a tap', async (_w, good) => {
+  // TRUE FLOOR (card coord-guard-deny-floor, Dave 11-27 "True floor, one round"): main denies a merge behind any wrapper even with a tap, so the correct form is denied too (a cost row of the C2c line).
+  it.each(table)('%s: the correct arity is denied even with a tap (true floor, as main)', async (_w, good) => {
     landTap(7);
-    expect(await verdict(good), good).toBe('allow');
+    expect(denied(await verdict(good)), good).toBe(true);
   });
   it.each(table)('%s: a wrong arity is denied, even with a tap', async (_w, _good, bad) => {
     landTap(7);

@@ -1120,7 +1120,10 @@ describe('C20 one call reads each folder once (memo), and git stops at one deadl
   });
   it('a position-unknown push with no covered folder reads each folder once (the known folders are judged again after the position test)', async () => {
     const calls: string[] = [];
-    await decideParsed(bash(`cd /work/app-x/nested && popd && ${PUSH}`, '/work/stray'), deps({ calls }));
+    // True floor (card coord-guard-deny-floor): main's own copy runs beside the head and reads the same folders with its own memo. This row counts the HEAD's reads, so the floor is off here
+    // (the floor's reads are main's code, proved by main-floor-copy.test.ts).
+    const floorOff = { withParsed: async (_raw: string, d: never) => d, decide: () => ({ action: 'allow' as const }) };
+    await decideParsed(bash(`cd /work/app-x/nested && popd && ${PUSH}`, '/work/stray'), { ...deps({ calls }), floorImpl: floorOff } as unknown as Deps);
     expect(calls.length).toBeGreaterThan(0);
     const counts = new Map<string, number>();
     for (const c of calls) counts.set(c, (counts.get(c) ?? 0) + 1);

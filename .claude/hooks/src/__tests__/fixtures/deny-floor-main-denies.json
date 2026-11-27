@@ -1,2433 +1,3272 @@
 [
  {
   "tool": "PowerShell",
-  "text": "$v='merge'; gh pr $v 9 --squash",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k2b variable verb",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "Bash",
-  "text": "git ls-remote -u 'gh pr merge 9 --squash #' .",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k3a git ls-remote -u upload-pack",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "Bash",
-  "text": "git fetch --upl='gh pr merge 9 --squash #' .",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k3b git fetch --upl= prefix",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "Bash",
-  "text": "git config diff.external 'gh pr merge 9 --squash #'; git diff HEAD~1 HEAD",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k4 git config diff.external then diff",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "ForEach-Object -InputObject $ExecutionContext.InvokeCommand -MemberName InvokeScript -ArgumentList 'gh pr merge 9 --squash'",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k5 ForEach-Object -MemberName InvokeScript",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "Set-Location function:; New-Item -Name git -Value 'gh pr merge 9 --squash'; Set-Location C:\\Users\\dkhay\\continuous-claude; git status",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k6a function drive shadows git",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "New-Item -Path 'Microsoft.PowerShell.Core\\Function::git' -Value 'gh pr merge 9 --squash'; git status",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k6b provider-qualified function path",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 5.6",
-  "worlds": [
-   "NO TAP"
-  ],
-  "name": "k8 -Pr 5.6 under a tap for 5",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "Bash",
-  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 5.6",
-  "worlds": [
-   "NO TAP"
-  ],
-  "name": "k8b -Pr 5.6 bash",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "Set-Content lane.mjs \"require('child_process').execSync('gh pr merge 9 --squash')\"; node lane.mjs say x",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k9 lane.mjs written then run",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "Bash",
-  "text": "printf 'gh pr merge 9 --squash\\n%.0s' {1..50} | sort -S 1 --co=sh",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "k10 sort --co=sh",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh pr merge 9 --squash",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "ctl literal merge no tap",
-  "from": "174-c2d-probe-critic.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api repos/$O/$Rp/pulls/ -X POST -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "S1 variable repo path, pulls/ with a trailing slash",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/ -X POST -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP"
-  ],
-  "name": "S1c control: literal path, pulls/ with a trailing slash",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api \"repos/$O/$Rp/pulls?state=open\" -X POST -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "S2 variable repo path, pulls with a query string",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api \"repos/Rev4nchist/Continuous-Claude-v3/pulls?state=open\" -X POST -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP"
-  ],
-  "name": "S2c control: literal path, pulls with a query string",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP"
-  ],
-  "name": "S3c control: literal endpoint",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X PUT repos/$O/$Rp/pulls/5/merge",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "S4 variable repo path, pulls/5/merge with -X PUT",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api repos/$O/$Rp/pulls/5/merge -X PUT -f sha=$SHA",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "S4b variable repo path, pulls/5/merge with -X PUT and a sha field",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "gh api -X PUT repos/$O/$Rp/pulls/5/merge",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "S4p variable repo path, pulls/5/merge (PowerShell)",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "S4c control: literal path, pulls/5/merge",
-  "from": "175-c2d-probe-seat-pass1.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X $M repos/$O/$Rp/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P1a -X $M, variable repo path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api --method $M \"repos/$O/$Rp/pulls\" -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P1b --method $M, variable repo path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X $M repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P1c -X $M, literal repo path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X \"$M\" repos/$O/$Rp/pulls/ -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P1d -X \"$M\", variable path with a trailing slash",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "gh api -X $m repos/$o/$rp/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P1e -X $m (PowerShell), variable repo path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X $M repos/$O/$Rp/pulls/5/merge",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P1f -X $M, the merge endpoint with a variable repo path",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP"
-  ],
-  "name": "P1g control: literal POST to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "LAND=scripts/github/land-pr.ps1; pwsh -File \"$LAND\" -Pr 7",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P2f assigned in the same text, then used",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "$land=\"scripts/github/land-pr.ps1\"; & $land -Pr 7",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P2g assigned in the same text (PowerShell)",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 7",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P2h control: literal land script",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "$GH pr merge 9 --squash",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P3a $GH pr merge",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "\"$GH\" pr merge 9 --squash",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P3b \"$GH\" pr merge",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "& $gh pr merge 9 --squash",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P3c & $gh pr merge",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "env $GH pr merge 9 --squash",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P3g env $GH pr merge",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api --method=$M repos/$O/$Rp/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P4a --method=$M, variable path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api --method=\"$M\" \"repos/$O/$Rp/pulls\" -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P4b --method=\"$M\", variable path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api --method=$M repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P4c --method=$M, literal path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api -X$M repos/$O/$Rp/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P4d -X$M attached, variable path to pulls",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "PowerShell",
-  "text": "gh api --method=$m repos/$o/$rp/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P4e --method=$m (PowerShell)",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api --method=$M repos/$O/$Rp/pulls/5/merge",
-  "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "P4f --method=$M on the merge endpoint, variable repo path",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "Bash",
-  "text": "gh api --method=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
-  "worlds": [
-   "NO TAP"
-  ],
-  "name": "P4g control: --method=POST literal",
-  "from": "176-c2d-probe-seat-pass2.txt"
- },
- {
-  "tool": "PowerShell",
+  "name": "177-aegis-rows1 p01 FE-Object -MemberName InvokeScript",
+  "from": "177-aegis-rows1.cjs",
   "text": "$ExecutionContext.InvokeCommand | ForEach-Object -MemberName InvokeScript -ArgumentList 'gh pr merge 6 --admin'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p01 FE-Object -MemberName InvokeScript",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p02 FE-Object InvokeScript positional",
+  "from": "177-aegis-rows1.cjs",
   "text": "$ExecutionContext.InvokeCommand | ForEach-Object InvokeScript 'gh pr merge 6 --admin'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p02 FE-Object InvokeScript positional",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p03 scriptblock cast piped to FE Invoke",
+  "from": "177-aegis-rows1.cjs",
   "text": "[scriptblock]'gh pr merge 6 --admin' | ForEach-Object Invoke",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p03 scriptblock cast piped to FE Invoke",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p04 scriptblock cast piped, spliced",
+  "from": "177-aegis-rows1.cjs",
   "text": "[scriptblock]'gh pr mer''''ge 6 --admin' | ForEach-Object Invoke",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p04 scriptblock cast piped, spliced",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p09 variable verb",
+  "from": "177-aegis-rows1.cjs",
   "text": "$v='merge'; gh pr $v 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p09 variable verb",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p12 iex of string",
+  "from": "177-aegis-rows1.cjs",
   "text": "iex 'gh pr merge 6 --admin'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p12 iex of string",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p13 dot-source scriptblock",
+  "from": "177-aegis-rows1.cjs",
   "text": ". { gh pr merge 6 --admin }",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p13 dot-source scriptblock",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p14 cast scriptblock, call op",
+  "from": "177-aegis-rows1.cjs",
   "text": "& ([scriptblock]'gh pr merge 6 --admin')",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p14 cast scriptblock, call op",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p15 Select-Object calculated prop",
+  "from": "177-aegis-rows1.cjs",
   "text": "1 | Select-Object @{n='x';e={gh pr merge 6 --admin}}",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p15 Select-Object calculated prop",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows1 p16 ExecutionContext property chain FE",
+  "from": "177-aegis-rows1.cjs",
   "text": "$ExecutionContext | ForEach-Object InvokeCommand | ForEach-Object InvokeScript 'gh pr merge 6 --admin'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p16 ExecutionContext property chain FE",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b01 ANSI-C verb",
+  "from": "177-aegis-rows1.cjs",
   "text": "gh pr $'merge' 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b01 ANSI-C verb",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b03 ANSI-C program",
+  "from": "177-aegis-rows1.cjs",
   "text": "$'gh' pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b03 ANSI-C program",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b07 var verb",
+  "from": "177-aegis-rows1.cjs",
   "text": "v=merge; gh pr $v 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b07 var verb",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b10 line continuation in verb",
+  "from": "177-aegis-rows1.cjs",
   "text": "gh pr mer\\\nge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b10 line continuation in verb",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b11 line continuation in program",
+  "from": "177-aegis-rows1.cjs",
   "text": "g\\\nh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b11 line continuation in program",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b14 eval spliced",
+  "from": "177-aegis-rows1.cjs",
   "text": "eval 'gh pr mer''ge 6 --admin'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b14 eval spliced",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b16 here-string into sh",
+  "from": "177-aegis-rows1.cjs",
   "text": "sh <<< 'gh pr merge 6 --admin'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b16 here-string into sh",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b17 process substitution source",
+  "from": "177-aegis-rows1.cjs",
   "text": "source <(echo 'gh pr merge 6 --admin')",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b17 process substitution source",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b20 ANSI-C push",
+  "from": "177-aegis-rows1.cjs",
   "text": "git pu$'s'h origin main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b20 ANSI-C push",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b21 locale push",
+  "from": "177-aegis-rows1.cjs",
   "text": "git $\"push\" origin main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b21 locale push",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b22 continuation push",
+  "from": "177-aegis-rows1.cjs",
   "text": "git pu\\\nsh origin main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b22 continuation push",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows1 b28 gh api --input body file merge",
+  "from": "177-aegis-rows1.cjs",
   "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge --input body.json",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "b28 gh api --input body file merge",
-  "from": "177-c2d-probe-aegis-rows1.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g01 config diff.external then diff",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config diff.external 'gh pr merge 9 --admin #'; git diff",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g01 config diff.external then diff",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g02 config filter clean then add",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config filter.z.clean 'gh pr merge 9 --admin #'; git add -A",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g02 config filter clean then add",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g03 config pager.log then log",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config pager.log 'gh pr merge 9 --admin #'; git log -1",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g03 config pager.log then log",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g04 config sequence.editor then status",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config sequence.editor 'gh pr merge 9 --admin #'; git status",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g04 config sequence.editor then status",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g05 config remote uploadpack then fetch",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config remote.zz.uploadpack 'gh pr merge 9 --admin #'; git fetch zz",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g05 config remote uploadpack then fetch",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g06 clone -u short upload-pack",
+  "from": "177-aegis-rows2.cjs",
   "text": "git clone -u 'gh pr merge 9 --admin #' file:///tmp/x y",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g06 clone -u short upload-pack",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g07 ls-remote -u short upload-pack",
+  "from": "177-aegis-rows2.cjs",
   "text": "git ls-remote -u 'gh pr merge 9 --admin #' file:///tmp/x",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g07 ls-remote -u short upload-pack",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g11 config credential.helper then fetch",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config credential.helper '!gh pr merge 9 --admin #'; git fetch fork",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g11 config credential.helper then fetch",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g12 config core.gitProxy then fetch",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config core.gitProxy 'gh pr merge 9 --admin #'; git fetch fork",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g12 config core.gitProxy then fetch",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g14 config diff.zz.textconv then diff",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config diff.zz.textconv 'gh pr merge 9 --admin #'; git diff",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g14 config diff.zz.textconv then diff",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g15 config uppercase alias key then status",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config ALIAS.zz '!gh pr merge 9 --admin'; git status",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g15 config uppercase alias key then status",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g16 config --add alias then status",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config --add alias.zz '!gh pr merge 9 --admin'; git status",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g16 config --add alias then status",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g17 diff.external with --no-pager",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config diff.external 'gh pr merge 9 --admin #'; git --no-pager diff",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g17 diff.external with --no-pager",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g18 git -C dir config then diff",
+  "from": "177-aegis-rows2.cjs",
   "text": "git -C . config diff.external 'gh pr merge 9 --admin #'; git -C . diff",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g18 git -C dir config then diff",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g19 config core.fsmonitor mixed case",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config Core.FsMonitor 'gh pr merge 9 --admin #'; git status",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g19 config core.fsmonitor mixed case",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g20 config = form diff.external",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config --local diff.external='gh pr merge 9 --admin #'; git diff",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g20 config = form diff.external",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g21 config merge driver then merge",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config merge.zz.driver 'gh pr merge 9 --admin #'; git merge zz",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g21 config merge driver then merge",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows2 g22 config notes rewriteRef noop",
+  "from": "177-aegis-rows2.cjs",
   "text": "git config core.editor 'gh pr merge 9 --admin #'; git status",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "g22 config notes rewriteRef noop",
-  "from": "177-c2d-probe-aegis-rows2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l01 land -Pr backtick",
+  "from": "177-aegis-rows3.cjs",
   "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 5`6",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l01 land -Pr backtick",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l06 land via call operator",
+  "from": "177-aegis-rows3.cjs",
   "text": "& scripts/github/land-pr.ps1 -Pr 6",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l06 land via call operator",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l07 land via & var",
+  "from": "177-aegis-rows3.cjs",
   "text": "$s='scripts/github/land-pr.ps1'; & $s -Pr 6",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "l07 land via & var",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l08 land -File= form",
+  "from": "177-aegis-rows3.cjs",
   "text": "pwsh -File=scripts/github/land-pr.ps1 -Pr 6",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l08 land -File= form",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l09 land pwsh -c runs file",
+  "from": "177-aegis-rows3.cjs",
   "text": "pwsh -c \"& scripts/github/land-pr.ps1 -Pr 6\"",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l09 land pwsh -c runs file",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l10 land -Command runs file",
+  "from": "177-aegis-rows3.cjs",
   "text": "pwsh -Command scripts/github/land-pr.ps1 -Pr 6",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l10 land -Command runs file",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 l11 land bare script path",
+  "from": "177-aegis-rows3.cjs",
   "text": "scripts/github/land-pr.ps1 -Pr 6",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l11 land bare script path",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l13 land Invoke-Expression",
+  "from": "177-aegis-rows3.cjs",
   "text": "iex \"& scripts/github/land-pr.ps1 -Pr 6\"",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l13 land Invoke-Expression",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "177-aegis-rows3 l14 land dot-source",
+  "from": "177-aegis-rows3.cjs",
   "text": ". scripts/github/land-pr.ps1 -Pr 6",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l14 land dot-source",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w01 env wrapper gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "env gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w01 env wrapper gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w02 timeout wrapper gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "timeout 30 gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w02 timeout wrapper gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w03 nohup gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "nohup gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w03 nohup gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w04 stdbuf gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "stdbuf -oL gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w04 stdbuf gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w05 xargs gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "echo 6 | xargs -I{} gh pr merge {} --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w05 xargs gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w06 env -S splits",
+  "from": "177-aegis-rows3.cjs",
   "text": "env -S 'gh pr merge 6 --admin'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w06 env -S splits",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w07 command gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "command gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w07 command gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w08 exec gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "exec gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w08 exec gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w09 env SAFE=x gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "env NO_COLOR=1 gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w09 env SAFE=x gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w10 nice gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "nice -n 5 gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w10 nice gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w11 watch gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "watch -n1 gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w11 watch gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w12 find -exec gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "find . -maxdepth 0 -exec gh pr merge 6 --admin ;",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w12 find -exec gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w13 parallel gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "parallel gh pr merge ::: 6",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w13 parallel gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w14 setsid gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "setsid gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w14 setsid gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w15 sudo gh merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "sudo gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w15 sudo gh merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 w16 timeout --signal then gh",
+  "from": "177-aegis-rows3.cjs",
   "text": "timeout --signal=KILL 30 gh pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w16 timeout --signal then gh",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 e01 gh alias set shell merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "gh alias set zz --shell 'gh pr merge 6'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "e01 gh alias set shell merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 e03 gh pr checkout -- after",
+  "from": "177-aegis-rows3.cjs",
   "text": "gh pr checkout 6 -- --upload-pack 'gh pr merge 6'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "e03 gh pr checkout -- after",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 e04 gh.exe pr merge",
+  "from": "177-aegis-rows3.cjs",
   "text": "gh.exe pr merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "e04 gh.exe pr merge",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 e05 gh  pr   merge extra spaces",
+  "from": "177-aegis-rows3.cjs",
   "text": "gh  pr   merge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "e05 gh  pr   merge extra spaces",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows3 e06 gh pr merge tab",
+  "from": "177-aegis-rows3.cjs",
   "text": "gh\tpr\tmerge 6 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "e06 gh pr merge tab",
-  "from": "177-c2d-probe-aegis-rows3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c01 create head var",
+  "from": "177-aegis-rows4.cjs",
   "text": "H=evil; gh pr create --head $H --base main --title t --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c01 create head var",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c02 create head subst",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head $(echo evil) --base main --title t --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c02 create head subst",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c03 create -R repo",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create -R Rev4nchist/Continuous-Claude-v3 --head evil --base main --title t --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c03 create -R repo",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c04 create title has $",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head evil --base main --title \"$USER\" --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c04 create title has $",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c05 create body-file",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head evil --base main --title t --body-file b.md",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c05 create body-file",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c06 create no flags",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "c06 create no flags",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c07 create label with backtick",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head evil --base main --title t --body b --label `echo x`",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c07 create label with backtick",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c08 create redirect",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head evil --base main --title t --body b > out.txt",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c08 create redirect",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c09 pr new alias",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr new --head evil --base main --title t --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c09 pr new alias",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c10 create head with semicolon in title",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head evil --base main --title \"a;b\" --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c10 create head with semicolon in title",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c11 create then merge chain",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head evil --base main --title t --body b && echo done",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c11 create then merge chain",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c12 create non-ascii title",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head evil --base main --title \"café\" --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c12 create non-ascii title",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 c13 create backslash in head",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr create --head ev\\il --base main --title t --body b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c13 create backslash in head",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a01 api POST pulls",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=t -f head=evil -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a01 api POST pulls",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a02 api POST pulls method flag",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api --method POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=evil -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a02 api POST pulls method flag",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a03 api POST pulls field eq",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls --field head=evil --field base=main --field title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a03 api POST pulls field eq",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a04 api POST pulls trailing slash",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls/ -f head=evil -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a04 api POST pulls trailing slash",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a05 api POST pulls query",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X POST 'repos/Rev4nchist/Continuous-Claude-v3/pulls?foo=bar' -f head=evil",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a05 api POST pulls query",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a06 api repos pulls var repo",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X POST repos/$OWNER/pulls -f head=evil -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a06 api repos pulls var repo",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a07 api merge PUT",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge -f merge_method=squash",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a07 api merge PUT",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a08 api merge method eq",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api --method=PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a08 api merge method eq",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge -F sha=0123456789012345678901234567890123456789",
+  "name": "177-aegis-rows4 a09 api merge -F sha",
+  "from": "177-aegis-rows4.cjs",
+  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge -F sha=@HEAD@",
   "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "a09 api merge -F sha",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+   "NO TAP"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a10 api merge no method (defaults GET?)",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a10 api merge no method (defaults GET?)",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a11 api merge uppercase PULLS",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/PULLS/6/MERGE",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a11 api merge uppercase PULLS",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a12 api merge with -H header",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api -X PUT -H 'Accept: x' repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a12 api merge with -H header",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 a13 api hostname flag merge",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh api --hostname github.com -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a13 api hostname flag merge",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh pr merge 6 --match-head-commit 0123456789012345678901234567890123456789 --admin",
+  "name": "177-aegis-rows4 m01 merge --match-head-commit",
+  "from": "177-aegis-rows4.cjs",
+  "text": "gh pr merge 6 --match-head-commit @HEAD@ --admin",
   "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "m01 merge --match-head-commit",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+   "NO TAP"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 m02 merge short cluster -sad",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr merge 6 -sad",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m02 merge short cluster -sad",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 m03 merge unknown flag",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr merge 6 --frobnicate --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m03 merge unknown flag",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 m04 merge body with redirect",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr merge 6 --admin -b \"$(cat x)\"",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m04 merge body with redirect",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 m05 merge two numbers",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr merge 6 7 --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m05 merge two numbers",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 m06 merge --repo other",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr merge 6 --repo other/x --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m06 merge --repo other",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "177-aegis-rows4 m07 merge -R other",
+  "from": "177-aegis-rows4.cjs",
   "text": "gh pr merge 6 -R other/x --admin",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m07 merge -R other",
-  "from": "177-c2d-probe-aegis-rows4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m1 -X=POST",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X=POST -f head=feat/x -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m1 -X=POST",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m2 --input before endpoint",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api --input body.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m2 --input before endpoint",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m3 -iX POST cluster",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api -iX POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=feat/x -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m3 -iX POST cluster",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m3b -iXPOST",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api -iXPOST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=feat/x -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m3b -iXPOST",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m5 --input after endpoint",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --input body.json",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m5 --input after endpoint",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m6 --method=POST",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --method=POST -f head=feat/x -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m6 --method=POST",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m7 -XPOST",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -XPOST -f head=feat/x -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m7 -XPOST",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "178-critic2-rows m8 -X=POST ps",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X=POST -f head=feat/x -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m8 -X=POST ps",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "178-critic2-rows m10 backslash query",
+  "from": "178-critic2-rows.cjs",
   "text": "gh api repos/$O/$Rp/pulls?per_page=1 -f head=x -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m10 backslash query",
-  "from": "178-critic2-probe.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 c0 control literal create",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "c0b control implicit post",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --input body.json repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 c0b control implicit post",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "179-aegis3-rows1 a1b --input steals endpoint + fields",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api --input body.json repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a1b --input steals endpoint + fields",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows1 a1c --input steals endpoint pwsh",
+  "from": "179-aegis3-rows1.cjs",
   "text": "gh api --input body.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a1c --input steals endpoint pwsh",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a2 -X=POST",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "a2 -X=POST",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a2b -X=POST pwsh",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "a2b -X=POST pwsh",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t -H '-X: 1'",
+  "name": "179-aegis3-rows1 a3 header value -X sets anyMethod",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t -H '-X: 1'",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "a3 header value -X sets anyMethod",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t -t -X",
+  "name": "179-aegis3-rows1 a3b template value -X",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t -t -X",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "a3b template value -X",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f -Xa=1 -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a3c field value starts -X",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f -Xa=1 -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a3c field value starts -X",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -iH 'Accept: application/json' repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a4 cluster -iH steals endpoint",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api -iH 'Accept: application/json' repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a4 cluster -iH steals endpoint",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -iX POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a4b cluster -iX POST steals endpoint",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api -iX POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a4b cluster -iX POST steals endpoint",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -iF head=coord/shell-parser-c2c repos/Rev4nchist/Continuous-Claude-v3/pulls -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a4c cluster -iF steals endpoint",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api -iF head=@BR@ repos/Rev4nchist/Continuous-Claude-v3/pulls -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a4c cluster -iF steals endpoint",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "gh api --% -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a5 stop-parsing --%",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api --% -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a5 stop-parsing --%",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "gh api --% repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a5b stop-parsing --% implicit",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api --% repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "a5b stop-parsing --% implicit",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --hostname github.com repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a9 --hostname value then endpoint",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api --hostname github.com repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "a9 --hostname value then endpoint",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --cache 1h repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a10 --cache steals",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api --cache 1h repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "a10 --cache steals",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --paginate --slurp repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows1 a11 --slurp --paginate",
+  "from": "179-aegis3-rows1.cjs",
+  "text": "gh api --paginate --slurp repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "a11 --slurp --paginate",
-  "from": "179-aegis3-probe1.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "m=POST; gh api -X $m repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v1 method var",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "m=POST; gh api -X $m repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "v1 method var",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --method ${m:-POST} repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v2 method param exp",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api --method ${m:-POST} repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "v2 method param exp",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X $(echo POST) repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v3 method subst",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -X $(echo POST) repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "v3 method subst",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X {POST,} repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v4 method brace",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -X {POST,} repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "v4 method brace",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X post repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v5 method lowercase",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -X post repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "v5 method lowercase",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --method=POST repos/$o/r/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v6 --method=POST",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api --method=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
-   "NO TAP",
-   "TAP"
-  ],
-  "name": "v7 --method=POST with var repo",
-  "from": "179-aegis3-probe2.txt"
+   "NO TAP"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X=POST repos/$o/r/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v7 --method=POST with var repo",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api --method=POST repos/$o/r/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "v8 -X=POST with var repo",
-  "from": "179-aegis3-probe2.txt"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "179-aegis3-rows2 v8 -X=POST with var repo",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -X=POST repos/$o/r/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "$e='repos/Rev4nchist/Continuous-Claude-v3/pulls'; gh api $e -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v10 pwsh endpoint var no slash",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "$e='repos/Rev4nchist/Continuous-Claude-v3/pulls'; gh api $e -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "v10 pwsh endpoint var no slash",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "gh api repos/$env:R/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v12 pwsh env var in repo",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api repos/$env:R/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "v12 pwsh env var in repo",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pul`ls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v13 pwsh backtick escape in pulls",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pul`ls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "v13 pwsh backtick escape in pulls",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "iex \"gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t\"",
+  "name": "179-aegis3-rows2 v14 pwsh iex",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "iex \"gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t\"",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "v14 pwsh iex",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
-  "text": "& gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 v15 pwsh & gh",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "& gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "v15 pwsh & gh",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows2 v16 pwsh & gh --input",
+  "from": "179-aegis3-rows2.cjs",
   "text": "& gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "v16 pwsh & gh --input",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows2 v17 pwsh here-string input",
+  "from": "179-aegis3-rows2.cjs",
   "text": "@'\n{\"head\":\"x\",\"base\":\"main\",\"title\":\"t\"}\n'@ | gh api --input - repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "v17 pwsh here-string input",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/ -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 e1 trailing slash",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/ -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "e1 trailing slash",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api 'repos/Rev4nchist/Continuous-Claude-v3/pulls?a=b/c' -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 e2 query string",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api 'repos/Rev4nchist/Continuous-Claude-v3/pulls?a=b/c' -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "e2 query string",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api https://api.github.com/repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 e3 absolute url",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api https://api.github.com/repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "e3 absolute url",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api /repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 e4 leading slash",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api /repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "e4 leading slash",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api 'repos/{owner}/{repo}/pulls' -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 e5 placeholders",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api 'repos/{owner}/{repo}/pulls' -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "e5 placeholders",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pu''lls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 e6 quote splice",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pu''lls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "e6 quote splice",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 w1 env --input",
+  "from": "179-aegis3-rows2.cjs",
   "text": "env gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w1 env --input",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 w2 command -iF",
+  "from": "179-aegis3-rows2.cjs",
   "text": "command gh api -iF head=x repos/Rev4nchist/Continuous-Claude-v3/pulls -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w2 command -iF",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "sh -c 'gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t'",
+  "name": "179-aegis3-rows2 w3 sh -c -X=POST",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "sh -c 'gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w3 sh -c -X=POST",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 w4 bash -c --input",
+  "from": "179-aegis3-rows2.cjs",
   "text": "bash -c \"gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls\"",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w4 bash -c --input",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "eval 'gh api -iX POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t'",
+  "name": "179-aegis3-rows2 w6 eval -iX",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "eval 'gh api -iX POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w6 eval -iX",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows2 w7 pwsh -c --input",
+  "from": "179-aegis3-rows2.cjs",
   "text": "pwsh -c \"gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls\"",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w7 pwsh -c --input",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 w8 timeout --input",
+  "from": "179-aegis3-rows2.cjs",
   "text": "timeout 30 gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "w8 timeout --input",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "GH_REPO=Rev4nchist/Continuous-Claude-v3 gh api -X=POST 'repos/{owner}/{repo}/pulls' -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 w9 GH_REPO prefix -X=POST",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "GH_REPO=Rev4nchist/Continuous-Claude-v3 gh api -X=POST 'repos/{owner}/{repo}/pulls' -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "w9 GH_REPO prefix -X=POST",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --jq .number repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 o1 --jq then create",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api --jq .number repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "o1 --jq then create",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -H 'Accept: application/vnd.github+json' repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 o2 -H then create",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -H 'Accept: application/vnd.github+json' repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "o2 -H then create",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -p shadow-cat repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 o3 --preview",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -p shadow-cat repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "o3 --preview",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 o4 --input after endpoint",
+  "from": "179-aegis3-rows2.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --input b.json",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "o4 --input after endpoint",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -iq .number repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 o5 -iq cluster steals",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -iq .number repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "o5 -iq cluster steals",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -it x repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 o6 -it cluster steals",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -it x repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "o6 -it cluster steals",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api --verbose --silent repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -f title=t",
+  "name": "179-aegis3-rows2 o7 --verbose --silent",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api --verbose --silent repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "o7 --verbose --silent",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge -f sha=67ca11c729cc290072d1e7140cb357af25a042a4",
+  "name": "179-aegis3-rows2 m0 control api merge no sha",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "179-aegis3-rows2 m1 api merge tapped sha",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge -f sha=@HEAD@",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "m1 api merge tapped sha",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -H 'X-A: repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge' -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/7/merge -f sha=67ca11c729cc290072d1e7140cb357af25a042a4",
+  "name": "179-aegis3-rows2 m3 api merge header names tapped pr",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -H 'X-A: repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge' -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/7/merge -f sha=@HEAD@",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m3 api merge header names tapped pr",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge -f sha=67ca11c729cc290072d1e7140cb357af25a042a4 -iF sha=0000000000000000000000000000000000000000",
+  "name": "179-aegis3-rows2 m4 api merge -iF sha cluster",
+  "from": "179-aegis3-rows2.cjs",
+  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge -f sha=@HEAD@ -iF sha=@HEAD@",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m4 api merge -iF sha cluster",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 m5 api merge --input",
+  "from": "179-aegis3-rows2.cjs",
   "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/5/merge --input b.json",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m5 api merge --input",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 m6 api merge -X=PUT",
+  "from": "179-aegis3-rows2.cjs",
   "text": "gh api -X=PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/7/merge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m6 api merge -X=PUT",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 m7 api merge -iX PUT",
+  "from": "179-aegis3-rows2.cjs",
   "text": "gh api -iX PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/7/merge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m7 api merge -iX PUT",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows2 m8 api merge --%",
+  "from": "179-aegis3-rows2.cjs",
   "text": "gh api --% -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/7/merge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m8 api merge --%",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 m10 api merge escape",
+  "from": "179-aegis3-rows2.cjs",
   "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/7/mer\\ge",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m10 api merge escape",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows2 m11 api merge -XGET in header value",
+  "from": "179-aegis3-rows2.cjs",
   "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/7/merge -H 'a: -XGET'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "m11 api merge -XGET in header value",
-  "from": "179-aegis3-probe2.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i1 --input= form",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api --input=b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i1 --input= form",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i2 -X POST then --input steals",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api -X POST --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i2 -X POST then --input steals",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i3 --input then endpoint then -X POST",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i3 --input then endpoint then -X POST",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i4 --hostname= then --input",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api --hostname=github.com --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i4 --hostname= then --input",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows3 i5 gh.exe --input",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh.exe api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i5 gh.exe --input",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i6 quoted \"gh\" --input",
+  "from": "179-aegis3-rows3.cjs",
   "text": "\"gh\" api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i6 quoted \"gh\" --input",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i7 --input then quoted endpoint",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api --input b.json \"repos/Rev4nchist/Continuous-Claude-v3/pulls\"",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i7 --input then quoted endpoint",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i8 --input then absolute url",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api --input b.json https://api.github.com/repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i8 --input then absolute url",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i9 --input then placeholders",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api --input b.json 'repos/{owner}/{repo}/pulls'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i9 --input then placeholders",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 i10 --input var repo",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api --input b.json repos/$o/r/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "i10 --input var repo",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 x1 -X=POST lowercase",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api -X=post repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=x -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "x1 -X=POST lowercase",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 x3 -X POST later value -X",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=x -f base=main -t -X",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "x3 -X POST later value -X",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 x4 implicit POST, -H value --method",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=x -f base=main -H '--method: 1'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "x4 implicit POST, -H value --method",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows3 x5 pwsh -iF cluster",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api -iF head=x repos/Rev4nchist/Continuous-Claude-v3/pulls -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "x5 pwsh -iF cluster",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows3 x6 pwsh -t -X value",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=x -f base=main -t -X",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "x6 pwsh -t -X value",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows3 x7 tapped head, -iF evil head",
+  "from": "179-aegis3-rows3.cjs",
   "text": "gh api -iF head=evil repos/Rev4nchist/Continuous-Claude-v3/pulls -f base=main -f title=t",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "x7 tapped head, -iF evil head",
-  "from": "179-aegis3-probe3.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --field head=coord/shell-parser-c2c --field base=main",
+  "name": "179-aegis3-rows4 f1 --field space",
+  "from": "179-aegis3-rows4.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --field head=@BR@ --field base=main",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "f1 --field space",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --field=head=coord/shell-parser-c2c --field=base=main",
+  "name": "179-aegis3-rows4 f2 --field= form",
+  "from": "179-aegis3-rows4.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --field=head=@BR@ --field=base=main",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "f2 --field= form",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --raw-field head=coord/shell-parser-c2c --raw-field base=main",
+  "name": "179-aegis3-rows4 f3 --raw-field space",
+  "from": "179-aegis3-rows4.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --raw-field head=@BR@ --raw-field base=main",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "f3 --raw-field space",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --raw-field=head=coord/shell-parser-c2c --raw-field=base=main",
+  "name": "179-aegis3-rows4 f4 --raw-field= form",
+  "from": "179-aegis3-rows4.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --raw-field=head=@BR@ --raw-field=base=main",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "f4 --raw-field= form",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -fhead=coord/shell-parser-c2c -fbase=main",
+  "name": "179-aegis3-rows4 f5 attached -fhead=",
+  "from": "179-aegis3-rows4.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -fhead=@BR@ -fbase=main",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "f5 attached -fhead=",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows4 f6 -F head=@file",
+  "from": "179-aegis3-rows4.cjs",
   "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -F head=@h.txt -f base=main",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "f6 -F head=@file",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/shell-parser-c2c -f base=main -F body=@b.md",
+  "name": "179-aegis3-rows4 f7 -F body=@file",
+  "from": "179-aegis3-rows4.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -F body=@b.md",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "f7 -F body=@file",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows4 f8 --input - stdin",
+  "from": "179-aegis3-rows4.cjs",
   "text": "echo '{}' | gh api --input - repos/Rev4nchist/Continuous-Claude-v3/pulls",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "f8 --input - stdin",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows4 p2 Invoke-Expression full name",
+  "from": "179-aegis3-rows4.cjs",
   "text": "Invoke-Expression 'gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p2 Invoke-Expression full name",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows4 p3 Invoke-Expression -X=POST",
+  "from": "179-aegis3-rows4.cjs",
   "text": "Invoke-Expression 'gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=x -f base=main'",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p3 Invoke-Expression -X=POST",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows4 p4 & with --input in script block",
+  "from": "179-aegis3-rows4.cjs",
   "text": "& { gh api --input b.json repos/Rev4nchist/Continuous-Claude-v3/pulls }",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "p4 & with --input in script block",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows4 l1 land script",
+  "from": "179-aegis3-rows4.cjs",
   "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 9",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "l1 land script",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows4 l2 land script cleanup inside quoted value",
+  "from": "179-aegis3-rows4.cjs",
   "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 9 -Note \"-CleanupOnly\"",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "l2 land script cleanup inside quoted value",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "PowerShell",
+  "name": "179-aegis3-rows4 l4 land script tapped 5 plus cleanup 9",
+  "from": "179-aegis3-rows4.cjs",
   "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 5; pwsh -File scripts/github/land-pr.ps1 -Pr 9 -CleanupOnly",
   "worlds": [
    "NO TAP"
-  ],
-  "name": "l4 land script tapped 5 plus cleanup 9",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows4 c1 gh pr create -H cluster",
+  "from": "179-aegis3-rows4.cjs",
   "text": "gh pr create -dH evil -B main -t t -b b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c1 gh pr create -H cluster",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows4 c2 gh pr create --head=",
+  "from": "179-aegis3-rows4.cjs",
   "text": "gh pr create --head=evil --base main -t t -b b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c2 gh pr create --head=",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
+  "name": "179-aegis3-rows4 c3 gh pr new",
+  "from": "179-aegis3-rows4.cjs",
   "text": "gh pr new --head evil --base main -t t -b b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c3 gh pr new",
-  "from": "179-aegis3-probe4.txt"
+  ]
  },
  {
   "tool": "Bash",
-  "text": "gh pr create -R other/repo --head coord/shell-parser-c2c --base main -t t -b b",
+  "name": "179-aegis3-rows4 c4 gh pr create -R other",
+  "from": "179-aegis3-rows4.cjs",
+  "text": "gh pr create -R other/repo --head @BR@ --base main -t t -b b",
   "worlds": [
    "NO TAP",
    "TAP"
-  ],
-  "name": "c4 gh pr create -R other",
-  "from": "179-aegis3-probe4.txt"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "02-classA-rows A1 rg",
+  "from": "02-classA-rows.cjs",
+  "text": "rg -n \"gh pr merge\" scripts",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "02-classA-rows A2 grep quoted",
+  "from": "02-classA-rows.cjs",
+  "text": "grep -n \"gh pr merge\" scripts/x.md",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "02-classA-rows A3 grep unquoted",
+  "from": "02-classA-rows.cjs",
+  "text": "grep -rn gh pr merge docs",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "02-classA-rows A4 echo unquoted",
+  "from": "02-classA-rows.cjs",
+  "text": "echo gh pr merge 12 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "02-classA-rows A1p rg",
+  "from": "02-classA-rows.cjs",
+  "text": "rg -n \"gh pr merge\" scripts",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "02-classA-rows A2p grep quoted",
+  "from": "02-classA-rows.cjs",
+  "text": "grep -n \"gh pr merge\" scripts/x.md",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "02-classA-rows A3p grep unquoted",
+  "from": "02-classA-rows.cjs",
+  "text": "grep -rn gh pr merge docs",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "02-classA-rows A4p echo unquoted",
+  "from": "02-classA-rows.cjs",
+  "text": "echo gh pr merge 12 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "02-classA-rows A5 grep then a real merge",
+  "from": "02-classA-rows.cjs",
+  "text": "grep -n \"gh pr merge\" notes.md && gh pr merge 12 --squash --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows S1",
+  "from": "09-policyP-rows.cjs",
+  "text": "$s='C:/tmp/scratch/open-pr.ps1'\n@'\n$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST `\n  -f title='feat(x): y' -f head=feat/x -f base=main\n'@ | Set-Content -LiteralPath $s -Encoding utf8",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows S2",
+  "from": "09-policyP-rows.cjs",
+  "text": "$s='C:/tmp/scratch/open-pr.ps1'\n@'\n$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST `\n  -f title='feat(x): y' -f head=feat/x -f base=main\n'@ | Set-Content -LiteralPath $s -Encoding utf8\n& $s",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows S3",
+  "from": "09-policyP-rows.cjs",
+  "text": "$s='C:/tmp/scratch/open-pr.ps1'\n@'\n$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST `\n  -f title='feat(x): y' -f head=feat/x -f base=main\n'@ | Set-Content -LiteralPath $s -Encoding utf8\nGet-Content -LiteralPath $s -Raw | Invoke-Expression",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows S5",
+  "from": "09-policyP-rows.cjs",
+  "text": "$s='C:/tmp/scratch/open-pr.ps1'\n@'\n$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST `\n  -f title='feat(x): y' -f head=feat/x -f base=main\n'@ | Set-Content -LiteralPath $s -Encoding utf8\n. $s",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows S6",
+  "from": "09-policyP-rows.cjs",
+  "text": "$s='C:/tmp/scratch/open-pr.ps1'\n@'\n$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST `\n  -f title='feat(x): y' -f head=feat/x -f base=main\n'@ | Set-Content -LiteralPath $s -Encoding utf8\npwsh -NoProfile -File $s",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows S7",
+  "from": "09-policyP-rows.cjs",
+  "text": "$s='C:/tmp/scratch/open-pr.ps1'\n@'\n$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST `\n  -f title='feat(x): y' -f head=feat/x -f base=main\n'@ | Set-Content -LiteralPath $s -Encoding utf8\niex (Get-Content -LiteralPath $s -Raw)",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows S8",
+  "from": "09-policyP-rows.cjs",
+  "text": "$s='C:/tmp/scratch/open-pr.ps1'\n@'\n$ErrorActionPreference = 'Stop'\nSet-Location -LiteralPath 'C:/Users/dkhay/continuous-claude/.claude/worktrees/x' -ErrorAction Stop\ngh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST `\n  -f title='feat(x): y' -f head=feat/x -f base=main\n'@ | Set-Content -LiteralPath $s -Encoding utf8\n& 'C:/tmp/scratch/open-pr.ps1'",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "09-policyP-rows A1 >",
+  "from": "09-policyP-rows.cjs",
+  "text": "echo \"gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x\" > run.sh",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "09-policyP-rows A2 >>",
+  "from": "09-policyP-rows.cjs",
+  "text": "echo \"gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x\" >> run.sh",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows A3 >",
+  "from": "09-policyP-rows.cjs",
+  "text": "echo \"gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x\" > run.sh",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows A4 >>",
+  "from": "09-policyP-rows.cjs",
+  "text": "echo \"gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x\" >> run.sh",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows D1a",
+  "from": "09-policyP-rows.cjs",
+  "text": "echo `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x`",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows D1b",
+  "from": "09-policyP-rows.cjs",
+  "text": "echo `gh pr merge 5 --squash`",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows D2a",
+  "from": "09-policyP-rows.cjs",
+  "text": "$(echo a; echo 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x')",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows D2b",
+  "from": "09-policyP-rows.cjs",
+  "text": "printf -v x 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x'; $x",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows D2c",
+  "from": "09-policyP-rows.cjs",
+  "text": "$(echo a; echo 'gh pr merge 5 --squash')",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows D2d",
+  "from": "09-policyP-rows.cjs",
+  "text": "printf -v x 'gh pr merge 5 --squash'; $x",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows L1c",
+  "from": "09-policyP-rows.cjs",
+  "text": "Add-Content -LiteralPath x.md -Value 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x'",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows L1d",
+  "from": "09-policyP-rows.cjs",
+  "text": "Select-String -Pattern 'gh pr merge' -Path x.md",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "09-policyP-rows L1e",
+  "from": "09-policyP-rows.cjs",
+  "text": "'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=x' | Out-File x.txt",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "16-critic-rows C1 critic",
+  "from": "16-critic-rows.cjs",
+  "text": "Add-Content -LiteralPath notes.md -Value 'see land-pr.ps1 -P\"r\" 5`6 later'",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "16-critic-rows C1b plain number, control",
+  "from": "16-critic-rows.cjs",
+  "text": "Add-Content -LiteralPath notes.md -Value 'see land-pr.ps1 -Pr 5 later'",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "16-critic-rows C1c backtick no quote",
+  "from": "16-critic-rows.cjs",
+  "text": "Add-Content -LiteralPath notes.md -Value 'see land-pr.ps1 -Pr 5`6 later'",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "16-critic-rows C1d split quote",
+  "from": "16-critic-rows.cjs",
+  "text": "Add-Content -LiteralPath notes.md -Value 'see land-pr.ps1 -P\"r\" 5 later'",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "16-critic-rows C1e bash echo",
+  "from": "16-critic-rows.cjs",
+  "text": "echo 'see land-pr.ps1 -P\"r\" 5`6 later' >> notes.md",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "18-aegis-repro-rows H1a env wrapper merge",
+  "from": "18-aegis-repro-rows.cjs",
+  "text": "env gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "18-aegis-repro-rows H1b timeout wrapper merge",
+  "from": "18-aegis-repro-rows.cjs",
+  "text": "timeout 30 gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "18-aegis-repro-rows H1c env wrapper create",
+  "from": "18-aegis-repro-rows.cjs",
+  "text": "env gh pr create --head coord/deny-floor --base main --title t --body b",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "18-aegis-repro-rows H2a create title with <<",
+  "from": "18-aegis-repro-rows.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title \"a << b\" --body b",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "18-aegis-repro-rows H3a land two numbers",
+  "from": "18-aegis-repro-rows.cjs",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 9`5 -Pr 6",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "18-aegis-repro-rows H3b land remote string",
+  "from": "18-aegis-repro-rows.cjs",
+  "text": "& ./scripts/github/land-pr.ps1 -Pr 9`5 -Remote 'fork -Pr 6'",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "18-aegis-repro-rows ctl plain merge no wrapper",
+  "from": "18-aegis-repro-rows.cjs",
+  "text": "gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies k2b variable verb",
+  "from": "deny-floor-main-denies.json",
+  "text": "$v='merge'; gh pr $v 9 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies k3a git ls-remote -u upload-pack",
+  "from": "deny-floor-main-denies.json",
+  "text": "git ls-remote -u 'gh pr merge 9 --squash #' .",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies k3b git fetch --upl= prefix",
+  "from": "deny-floor-main-denies.json",
+  "text": "git fetch --upl='gh pr merge 9 --squash #' .",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies k4 git config diff.external then diff",
+  "from": "deny-floor-main-denies.json",
+  "text": "git config diff.external 'gh pr merge 9 --squash #'; git diff HEAD~1 HEAD",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies k5 ForEach-Object -MemberName InvokeScript",
+  "from": "deny-floor-main-denies.json",
+  "text": "ForEach-Object -InputObject $ExecutionContext.InvokeCommand -MemberName InvokeScript -ArgumentList 'gh pr merge 9 --squash'",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies k6a function drive shadows git",
+  "from": "deny-floor-main-denies.json",
+  "text": "Set-Location function:; New-Item -Name git -Value 'gh pr merge 9 --squash'; Set-Location C:\\Users\\dkhay\\continuous-claude; git status",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies k6b provider-qualified function path",
+  "from": "deny-floor-main-denies.json",
+  "text": "New-Item -Path 'Microsoft.PowerShell.Core\\Function::git' -Value 'gh pr merge 9 --squash'; git status",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies k8 -Pr 5.6 under a tap for 5",
+  "from": "deny-floor-main-denies.json",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 5.6",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies k8b -Pr 5.6 bash",
+  "from": "deny-floor-main-denies.json",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 5.6",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies k9 lane.mjs written then run",
+  "from": "deny-floor-main-denies.json",
+  "text": "Set-Content lane.mjs \"require('child_process').execSync('gh pr merge 9 --squash')\"; node lane.mjs say x",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies k10 sort --co=sh",
+  "from": "deny-floor-main-denies.json",
+  "text": "printf 'gh pr merge 9 --squash\\n%.0s' {1..50} | sort -S 1 --co=sh",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies ctl literal merge no tap",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh pr merge 9 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies S1 variable repo path, pulls/ with a trailing slash",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api repos/$O/$Rp/pulls/ -X POST -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies S1c control: literal path, pulls/ with a trailing slash",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/ -X POST -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies S2 variable repo path, pulls with a query string",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api \"repos/$O/$Rp/pulls?state=open\" -X POST -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies S2c control: literal path, pulls with a query string",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api \"repos/Rev4nchist/Continuous-Claude-v3/pulls?state=open\" -X POST -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies S3c control: literal endpoint",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies S4 variable repo path, pulls/5/merge with -X PUT",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X PUT repos/$O/$Rp/pulls/5/merge",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies S4b variable repo path, pulls/5/merge with -X PUT and a sha field",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api repos/$O/$Rp/pulls/5/merge -X PUT -f sha=$SHA",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies S4p variable repo path, pulls/5/merge (PowerShell)",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X PUT repos/$O/$Rp/pulls/5/merge",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P1a -X $M, variable repo path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X $M repos/$O/$Rp/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P1b --method $M, variable repo path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api --method $M \"repos/$O/$Rp/pulls\" -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P1c -X $M, literal repo path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X $M repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P1d -X \"$M\", variable path with a trailing slash",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X \"$M\" repos/$O/$Rp/pulls/ -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies P1e -X $m (PowerShell), variable repo path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X $m repos/$o/$rp/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P1f -X $M, the merge endpoint with a variable repo path",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X $M repos/$O/$Rp/pulls/5/merge",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P2f assigned in the same text, then used",
+  "from": "deny-floor-main-denies.json",
+  "text": "LAND=scripts/github/land-pr.ps1; pwsh -File \"$LAND\" -Pr 7",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies P2g assigned in the same text (PowerShell)",
+  "from": "deny-floor-main-denies.json",
+  "text": "$land=\"scripts/github/land-pr.ps1\"; & $land -Pr 7",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P2h control: literal land script",
+  "from": "deny-floor-main-denies.json",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 7",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P3a $GH pr merge",
+  "from": "deny-floor-main-denies.json",
+  "text": "$GH pr merge 9 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P3b \"$GH\" pr merge",
+  "from": "deny-floor-main-denies.json",
+  "text": "\"$GH\" pr merge 9 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies P3c & $gh pr merge",
+  "from": "deny-floor-main-denies.json",
+  "text": "& $gh pr merge 9 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P3g env $GH pr merge",
+  "from": "deny-floor-main-denies.json",
+  "text": "env $GH pr merge 9 --squash",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P4a --method=$M, variable path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api --method=$M repos/$O/$Rp/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P4b --method=\"$M\", variable path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api --method=\"$M\" \"repos/$O/$Rp/pulls\" -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P4c --method=$M, literal path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api --method=$M repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P4d -X$M attached, variable path to pulls",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api -X$M repos/$O/$Rp/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "deny-floor-main-denies P4e --method=$m (PowerShell)",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api --method=$m repos/$o/$rp/pulls -f head=@BR@ -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "deny-floor-main-denies P4f --method=$M on the merge endpoint, variable repo path",
+  "from": "deny-floor-main-denies.json",
+  "text": "gh api --method=$M repos/$O/$Rp/pulls/5/merge",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k3 nice merge with head",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "nice -n 5 gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k4 nohup merge with head",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "nohup gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k5 command merge with head",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "command gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k6 exec merge with head",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "exec gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k7 stdbuf merge with head",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "stdbuf -oL gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k8 env NO_COLOR merge with head",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "env NO_COLOR=1 gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k9 builtin merge with head",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "builtin gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k10 env api merge with sha",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "env gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge -f sha=@HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k11 timeout api merge with sha",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "timeout 30 gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge -f sha=@HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows1 k12 pwsh env merge",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "env gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k13 env env merge",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "env env gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k14 timeout -k 5 10 merge",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "timeout -k 5 10 gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 k15 nice --adjustment",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "nice --adjustment 3 gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 c0 control create",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title t --body b",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 c2 timeout create",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "timeout 30 gh pr create --head coord/deny-floor --base main --title t --body b",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 c3 command api create",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "command gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows1 c4 nohup api create",
+  "from": "22-aegis-pass1-rows1.cjs",
+  "text": "nohup gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows3 l1 backtick first then tapped -P",
+  "from": "22-aegis-pass1-rows3.cjs",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 9`5 -P 6",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows3 l3 direct path backtick then tapped",
+  "from": "22-aegis-pass1-rows3.cjs",
+  "text": "& ./scripts/github/land-pr.ps1 -Pr 9`5 -Pr 6",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows3 l4 bash backtick then tapped",
+  "from": "22-aegis-pass1-rows3.cjs",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 9\\`5 -Pr 6",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows3 l5 colon form backtick then tapped",
+  "from": "22-aegis-pass1-rows3.cjs",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr:9`5 -Pr:6",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows4 l8 backtick first, -P 6 inside a double-quoted value",
+  "from": "22-aegis-pass1-rows4.cjs",
+  "text": "pwsh -File scripts/github/land-pr.ps1 -Pr 9`5 -Method merge -Remote \"fork -P 6\"",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 f0 control api create tapped",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 f1 --input steals endpoint",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api --input body.json repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 f2 cluster -iX POST",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api -iX POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 f3 -X=POST",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api -X=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 f4 field value starts -X",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f -Xa=1 -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 f4b header value -X",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t -H '-X: 1'",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows5 f5 stop-parsing --%",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api --% -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows5 f5b stop-parsing implicit",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api --% repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=t",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 h2 single-quoted title holds <<",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title 'a <<EOF b' --body b",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows5 h3 pwsh title holds <<",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title \"a << b\" --body b",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 h4 real heredoc body",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title t --body \"$(cat <<'EOF'\nhi\nEOF\n)\"",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 m1 merge 2>&1",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr merge 6 --match-head-commit @HEAD@ 2>&1",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 m2 merge quoted head",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr merge 6 --match-head-commit \"@HEAD@\"",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "PowerShell",
+  "name": "22-aegis-pass1-rows5 m3 pwsh merge quoted head",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr merge 6 --match-head-commit '@HEAD@'",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 m4 GH_REPO prefix merge",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "GH_REPO=Rev4nchist/Continuous-Claude-v3 gh pr merge 6 --match-head-commit @HEAD@",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 m5 api merge sha",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api -X PUT repos/Rev4nchist/Continuous-Claude-v3/pulls/6/merge -f sha=@HEAD@",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 m6 merge with $x var elsewhere",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr merge 6 --match-head-commit @HEAD@ --subject \"$x\"",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 m7 merge with brace word",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr merge 6 --match-head-commit @HEAD@ --subject {a,b}",
+  "worlds": [
+   "NO TAP",
+   "TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 c5 create with $(...) title",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title \"$(date)\" --body b",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 c6 create with --title=$x",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title=\"$x\" --body b",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 c7 create 2>&1",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title t --body b 2>&1",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 c8 create with redirect",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh pr create --head coord/deny-floor --base main --title t --body b > out.txt",
+  "worlds": [
+   "NO TAP"
+  ]
+ },
+ {
+  "tool": "Bash",
+  "name": "22-aegis-pass1-rows5 c9 api create with title=$x",
+  "from": "22-aegis-pass1-rows5.cjs",
+  "text": "gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f head=coord/deny-floor -f base=main -f title=\"$x\"",
+  "worlds": [
+   "NO TAP"
+  ]
  }
 ]
