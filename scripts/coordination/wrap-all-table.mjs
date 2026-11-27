@@ -32,60 +32,89 @@ const NEXT = {
 const SEAT_ONLY_LINE = 'only the seat sends; run /wrap-all in the seat session';
 const sid8Of = (id) => String(id ?? '').slice(0, 8);
 
+// Text from the board or the lock prints on one line, cut to 80 characters: no forged Send line or WRAP WORD header.
+const oneLine = (s) => String(s ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').slice(0, 80);
+/** A publish.lock record: an object with an 8-hex session, as fleetops-html.mjs writes it. An array or an empty object has none. */
+const validLock = (l) => !!l && typeof l === 'object' && /^[0-9a-f]{8}/i.test(String(l.session ?? ''));
+
 const KIND_LABEL = { 'PRE-PR': 'pre-pr', 'HOOK BUILD': 'hook build' };
 const pad2 = (t) => String(t).padStart(5, '0');
 const HEAD_AFTER_WORD = /\bhead\s+([0-9a-f]{7,40})\b/;
 const HEAD_ANY = /\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/g;
 
+// One rule for every case: when the table cannot tie a word to a run, the run stays open (no READY). The seat reads the note.
+const headsTie = (a, b) => !!a && !!b && (a.startsWith(b) || b.startsWith(a));
+
 /**
- * Running work in one lane note, read as events in order. A START word carries a time (PRE-PR START 11:48 CST); the words with no time are a
- * rule, not a START. Each START is open until it is closed:
- *   - an END of the same kind closes the latest open START of that kind;
- *   - a VOID closes only the START it names, by its time (HH:MM) or by its head (a hex sha of 7 or more characters). The clock stamp of the
- *     VOID itself ("VOID 13:33 CST") is not a tie. A VOID that names a kind closes only that kind. A VOID that names no START, or a START that is not
- *     open, closes nothing, also when it comes right after a START (a false "running" fails closed: the seat reads the note).
+ * Running work in one lane note, read as events in order. A START word carries a time (PRE-PR START 11:48 CST) or is the line that pre-pr
+ * writes itself (PRE-PR START pid 4242 head <sha>); the words with no time and no pid are a rule, not a START. Each START is open until closed:
+ *   - an END of the same kind closes the latest open START of that kind that it ties to: by head when both name one (a pre-pr END line is
+ *     "PRE-PR END pid N head <sha>"), else by time (the END is not earlier than the START). No tie, no close;
+ *   - a VOID closes only the START it names, by its time (HH:MM) or by its head (a hex sha of 7 or more characters). It reads one sentence:
+ *     a later "VOID" word inside that sentence is not a new VOID, and a time in the next sentence is not a tie. The clock stamp of the VOID
+ *     itself ("VOID 13:33 CST", "VOID (13:33 CST)", "VOID at 13:33") is not a tie. A VOID that names a kind closes only that kind. A time with
+ *     no head that fits two or more open STARTs closes none of them. A VOID that names no START closes nothing, also right after a START.
  * Returns { prePr, hookBuild, open: [{ kind, label, time, head }] }.
  */
 export function runningWork(note) {
   const text = String(note ?? '');
   const events = [];
-  for (const m of text.matchAll(/\b(PRE-PR|HOOK BUILD) (START|END) (\d{1,2}:\d{2})/g)) events.push({ type: m[2], kind: m[1], time: pad2(m[3]), at: m.index, end: m.index + m[0].length });
-  for (const m of text.matchAll(/\bVOID\b/g)) events.push({ type: 'VOID', at: m.index, end: m.index + m[0].length });
+  for (const m of text.matchAll(/\b(PRE-PR|HOOK BUILD) START pid \d+ head ([0-9a-f]{7,40})\b/g)) events.push({ type: 'START', kind: m[1], time: null, head: m[2], at: m.index, end: m.index + m[0].length });
+  for (const m of text.matchAll(/\b(PRE-PR|HOOK BUILD) END pid \d+ head ([0-9a-f]{7,40})\b/g)) events.push({ type: 'END', kind: m[1], time: null, head: m[2], at: m.index, end: m.index + m[0].length });
+  for (const m of text.matchAll(/\b(PRE-PR|HOOK BUILD) (START|END) (\d{1,2}:\d{2})/g)) events.push({ type: m[2], kind: m[1], time: pad2(m[3]), head: undefined, at: m.index, end: m.index + m[0].length });
   events.sort((x, y) => x.at - y.at);
+  // A VOID reads one sentence, up to the next START or END word. A VOID word inside that sentence is part of it.
+  const voids = [];
+  let voidEnd = -1;
+  for (const m of text.matchAll(/\bVOID\b/g)) {
+    if (m.index < voidEnd) continue;
+    const from = m.index + m[0].length;
+    const nextRun = events.find((e) => e.at >= from)?.at ?? text.length;
+    const sentence = /\.(?=\s|$)/.exec(text.slice(from, nextRun));
+    voidEnd = Math.min(nextRun, from + 600, sentence ? from + sentence.index : text.length);
+    voids.push({ type: 'VOID', at: m.index, from, to: voidEnd });
+  }
+  const all = [...events, ...voids].sort((x, y) => x.at - y.at);
   const open = [];
-  events.forEach((e, i) => {
-    const stop = events[i + 1]?.at ?? text.length;
+  all.forEach((e, i) => {
+    if (e.type === 'VOID') return closeByVoid(open, text.slice(e.from, e.to));
+    const stop = all.slice(i + 1).find((x) => x.type !== 'VOID')?.at ?? text.length;
+    const head = e.head === undefined ? (HEAD_AFTER_WORD.exec(text.slice(e.end, stop))?.[1] ?? null) : e.head;
     if (e.type === 'START') {
-      open.push({ kind: e.kind, label: KIND_LABEL[e.kind], time: e.time, head: HEAD_AFTER_WORD.exec(text.slice(e.end, stop))?.[1] ?? null });
-    } else if (e.type === 'END') {
-      for (let k = open.length - 1; k >= 0; k--) if (open[k].kind === e.kind) { open.splice(k, 1); break; }
+      open.push({ kind: e.kind, label: KIND_LABEL[e.kind], time: e.time, head });
     } else {
-      let seg = text.slice(e.end, Math.min(stop, e.end + 600));
-      seg = seg.replace(/^\s*\d{1,2}:\d{2}/, ''); // the stamp of the VOID itself is not a tie
-      const times = [...seg.matchAll(/\b\d{1,2}:\d{2}\b/g)].map((m) => pad2(m[0]));
-      const heads = [...seg.matchAll(HEAD_ANY)].map((m) => m[0]);
-      const kinds = new Set([...seg.matchAll(/\b(PRE-PR|HOOK BUILD)\b/g)].map((m) => m[1]));
       for (let k = open.length - 1; k >= 0; k--) {
         const o = open[k];
-        if (kinds.size && !kinds.has(o.kind)) continue;
-        const headTie = !!o.head && heads.some((h) => h.startsWith(o.head) || o.head.startsWith(h));
-        const timeTie = times.includes(o.time) && (!heads.length || !o.head || headTie);
-        if (headTie || timeTie) open.splice(k, 1);
+        if (o.kind !== e.kind) continue;
+        const tied = o.head && head ? headsTie(o.head, head) : !!(o.time && e.time && e.time >= o.time);
+        if (tied) { open.splice(k, 1); break; }
       }
     }
   });
   return { prePr: open.some((o) => o.kind === 'PRE-PR'), hookBuild: open.some((o) => o.kind === 'HOOK BUILD'), open };
 }
 
+function closeByVoid(open, sentence) {
+  const seg = sentence.replace(/^\W*(?:at\s+)?\d{1,2}:\d{2}(?:\s*[A-Z]{2,4}\b)?/, ' '); // the stamp of the VOID itself is not a tie
+  const times = [...seg.matchAll(/\b\d{1,2}:\d{2}\b/g)].map((m) => pad2(m[0]));
+  const heads = [...seg.matchAll(HEAD_ANY)].map((m) => m[0]);
+  const kinds = new Set([...seg.matchAll(/\b(PRE-PR|HOOK BUILD)\b/g)].map((m) => m[1]));
+  const cand = open.filter((o) => !kinds.size || kinds.has(o.kind));
+  const byHead = cand.filter((o) => heads.some((h) => headsTie(o.head, h)));
+  const byTime = cand.filter((o) => !byHead.includes(o) && o.time && times.includes(o.time) && (!heads.length || !o.head));
+  const close = new Set([...byHead, ...(byTime.length === 1 ? byTime : [])]);
+  for (let k = open.length - 1; k >= 0; k--) if (close.has(open[k])) open.splice(k, 1);
+}
+
 /**
  * The stop point of one session. A held FleetOps lock wins, then running work, then known unsaved work. A failed read (tracked or behind
  * is null) is UNKNOWN: it is never READY and it never hides known unsaved work. Then a main merge.
  */
-export function stopPoint({ refresh, prePr, hookBuild, tracked, behind, lockBlocks = false }) {
+export function stopPoint({ refresh, prePr, hookBuild, tracked, behind, lockBlocks = false, noWorktree = false }) {
   if (refresh) return STOP.RELEASE_LOCK;
   if (prePr || hookBuild) return STOP.WAIT_END;
   if (tracked > 0) return STOP.SAVE_PATCH;
-  if (tracked === null || behind === null || lockBlocks) return STOP.UNKNOWN;
+  if (tracked === null || behind === null || lockBlocks || noWorktree) return STOP.UNKNOWN;
   if (behind > 0) return STOP.MERGE_MAIN;
   return STOP.READY;
 }
@@ -99,7 +128,7 @@ export function wrapWordText() {
     '3. Rewrite your lane note with WAITS ON and NEXT. Write the Notion handoff.',
     '4. A lock in progress ends cleanly: run the failed release with its step number. Never leave a lock held.',
     'Failures of 11-26 this word stops:',
-    '- START words sent before the run lock granted: the lock answered WAIT (exit 75) and nothing ran. Run pre-pr.mjs --preflight first. A START goes out after PREFLIGHT PASS and the V7.3 reads, and before the run. When the run lock answers WAIT (exit 75), write VOID in the note: nothing ran.',
+    '- START words sent before the run lock granted: the lock answered WAIT (exit 75) and nothing ran. Run pre-pr.mjs --preflight first. A START goes out after PREFLIGHT PASS and the V7.3 reads, and before the run. When the run lock answers WAIT (exit 75), write VOID <START time> head <sha>: nothing ran. Name the START you void: a VOID with no time and head closes nothing.',
     '- A folder removed before the seat named it. Remove no folder and no worktree. The seat names each one. Unlink a junction first.',
     '- A FleetOps refresh cut at step 6.1. The holder of the publish lock finishes the step or runs the failed release with the step number.',
     'Never: /compact another session, kill a session, force-delete a folder.',
@@ -116,26 +145,32 @@ export function wrapWordText() {
  */
 export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock = null, forkMain = null, now = Date.now(), me = '', runLocks = null }) {
   const used = new Set();
-  const lockUnreadable = !!publishLock && publishLock.unreadable === true;
+  // A publish.lock that is not an object with a session (an empty object, an array) is unreadable, never "no lock".
+  const lockUnreadable = !!publishLock && (publishLock.unreadable === true || !validLock(publishLock));
   const warnings = [];
   if (lockUnreadable) warnings.push('publish.lock exists but cannot be read: a FleetOps refresh may be in progress. No row is READY until the seat reads it by hand.');
+  const runLockHeld = typeof runLocks === 'number' && runLocks > 0;
+  if (runLockHeld) warnings.push(`${runLocks} run lock file(s) held: a pre-pr or hook build may be running. No row is READY until the seat reads them by hand.`);
   const lockSid = publishLock && !lockUnreadable ? sid8Of(publishLock.session) : '';
   // Every live peer, plus every holder of an open lane that is not a live peer (an idle session is quiet for 5 minutes or more).
-  const sessions = peers.map((p) => ({ ...p, idle: false }));
+  const sessions = peers.map((p) => ({ ...p, name: oneLine(p.name), idle: false }));
   const seen = new Set(sessions.map((p) => sid8Of(p.id)));
   for (const l of lanes) {
     const s8 = sid8Of(l.owner_session_id);
     if (!l.owner_session_id || /^done$/.test(String(l.state)) || seen.has(s8)) continue;
     seen.add(s8);
-    sessions.push({ id: l.owner_session_id, name: l.owner_name || `session ${s8}`, lanes: '', last_alive: null, idle: true });
+    sessions.push({ id: l.owner_session_id, name: oneLine(l.owner_name) || `session ${s8}`, lanes: '', last_alive: null, idle: true });
   }
   // A publish.lock held by a session with no row (it exited, or it is not a peer and holds no lane) shows nowhere else: warn and block READY.
   const orphanLock = !!lockSid && !sessions.some((p) => sid8Of(p.id) === lockSid);
   if (orphanLock) {
     const ageMin = Number.isFinite(Date.parse(publishLock.at)) ? Math.round((now - Date.parse(publishLock.at)) / 60000) : null;
-    warnings.push(`publish.lock is held by session ${lockSid} (key ${publishLock.key ?? 'unknown'}, since ${publishLock.at ?? 'unknown'}) and that session has no row. No row is READY until the seat reads the lock by hand.${ageMin !== null && ageMin > 20 ? ` It is over 20 minutes old: a refresh can take it over.` : ''}`);
+    warnings.push(`publish.lock is held by session ${lockSid} (key ${oneLine(publishLock.key) || 'unknown'}, since ${oneLine(publishLock.at) || 'unknown'}) and that session has no row. No row is READY until the seat reads the lock by hand.${ageMin !== null && ageMin > 20 ? ` It is over 20 minutes old: a refresh can take it over.` : ''}`);
   }
-  const lockBlocks = lockUnreadable || orphanLock;
+  const lockBlocks = lockUnreadable || orphanLock || runLockHeld;
+  const seatLane = lanes.find((l) => l.id === 're-program' && l.owner_session_id);
+  const seatPeer = seatLane ? sessions.find((p) => sid8Of(p.id) === sid8Of(seatLane.owner_session_id)) : null;
+  const seat = seatPeer ? { name: seatPeer.name, sid8: sid8Of(seatPeer.id) } : null;
   const rows = sessions.map((p) => {
     const sid8 = sid8Of(p.id);
     const mine = lanes.filter((l) => sid8Of(l.owner_session_id) === sid8);
@@ -153,23 +188,22 @@ export function buildTable({ peers = [], lanes = [], worktrees = [], publishLock
     const behindUnknown = wts.some((w) => !known(w.behind));
     const behind = wts.reduce((n, w) => Math.max(n, known(w.behind) ? w.behind : 0), 0);
     const refresh = !!publishLock && !lockUnreadable && sid8Of(publishLock.session) === sid8;
-    const running = [...run.open.map((o) => `${o.label} START ${o.time}${o.head ? ` head ${o.head}` : ''}`), refresh ? 'FleetOps refresh' : ''].filter(Boolean).join(', ') || 'nothing';
+    const running = [...run.open.map((o) => `${o.label} START${o.time ? ` ${o.time}` : ''}${o.head ? ` head ${o.head}` : ''}`), refresh ? 'FleetOps refresh' : ''].filter(Boolean).join(', ') || 'nothing';
+    // A non-seat row with no matched worktree has nothing read: its unsaved work is not seen, so it is never READY.
+    const noWorktree = !(seat && sid8 === seat.sid8) && wts.length === 0;
     const stop = stopPoint({
       refresh, prePr: run.prePr, hookBuild: run.hookBuild,
       tracked: tracked > 0 ? tracked : (trackedUnknown ? null : 0),
-      behind: behindUnknown ? null : behind, lockBlocks,
+      behind: behindUnknown ? null : behind, lockBlocks, noWorktree,
     });
     const alive = Date.parse(p.last_alive);
     return {
       name: p.name, sid8, idle: !!p.idle, lanes: ids.join(', ') || '-', running, stop,
-      next: NEXT[stop] + (p.idle ? ' (idle: use SendMessage; a lane DM does not wake it)' : ''),
+      next: (stop === STOP.UNKNOWN && noWorktree ? 'no worktree matched this session: read its worktree status (git status) by hand before any handoff word' : NEXT[stop]) + (p.idle ? ' (idle: use SendMessage; a lane DM does not wake it)' : ''),
       uncommitted: tracked, untracked, behind: behindUnknown ? null : behind, trackedUnknown, worktrees: wts.map((w) => w.path),
       idleSec: Number.isFinite(alive) ? Math.max(0, Math.round((now - alive) / 1000)) : null,
     };
   });
-  const seatLane = lanes.find((l) => l.id === 're-program' && l.owner_session_id);
-  const seatPeer = seatLane ? sessions.find((p) => sid8Of(p.id) === sid8Of(seatLane.owner_session_id)) : null;
-  const seat = seatPeer ? { name: seatPeer.name, sid8: sid8Of(seatPeer.id) } : null;
   const canSend = !!seat && sid8Of(me) === seat.sid8;
   const sendLine = !seat
     ? 'no session holds re-program on this board; /wrap-all sends nothing'
@@ -270,7 +304,7 @@ export function readRunLocks() {
 export function readPublishLock(file = process.env.WRAP_ALL_PUBLISH_LOCK || path.join(os.homedir(), '.claude', 'state', 'lane-dash', 'publish.lock')) {
   if (!existsSync(file)) return null;
   const rec = readJson(file);
-  return rec && typeof rec === 'object' ? rec : { unreadable: true };
+  return validLock(rec) ? rec : { unreadable: true };
 }
 
 export function gather(root = path.resolve(HERE, '..', '..')) {

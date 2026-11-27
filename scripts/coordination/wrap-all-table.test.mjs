@@ -524,3 +524,27 @@ test('W52: the CLI reads the run lock folder: one held lock file gives a warning
   assert.ok(doc.warnings.some((w) => /run lock/i.test(w)), doc.warnings.join('\n'));
   assert.equal(doc.rows.some((r) => r.stop === W.STOP.READY), false);
 });
+
+// Rows W53 to W55 close the gaps that the mutation check of the fix found (each mutation survived the rows above).
+test('W53: a VOID word inside a VOID sentence is part of that sentence: the whole sentence is read once, an ambiguous time closes nothing', () => {
+  const t = W.buildTable(NOTE_RUN('HOOK BUILD START 12:00 CST. PRE-PR START 12:00 CST. VOID 12:01 CST: the 12:00 HOOK BUILD START and the PRE-PR START are unclear, so VOID the PRE-PR START of 12:00.'));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.WAIT_END);
+  assert.match(r.running, /hook build/);
+  assert.match(r.running, /pre-pr/);
+});
+
+test('W54: a VOID closes the START of its own sentence; a time in the next sentence ties nothing (STARTs with no head)', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 13:32 CST. PRE-PR START 14:03 CST. VOID 14:05 CST: the PRE-PR START of 13:32 never ran. WAITS ON: the 14:03 run.'));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.WAIT_END);
+  assert.match(r.running, /14:03/);
+  assert.doesNotMatch(r.running, /13:32/);
+});
+
+test('W55: an END that names another head does not close the START even when its time is later', () => {
+  const t = W.buildTable(NOTE_RUN('PRE-PR START 14:03 CST head de0dd692. PRE-PR END 14:20 CST head ffc4e110 PASS.'));
+  const r = A('Coord standard')(t);
+  assert.equal(r.stop, W.STOP.WAIT_END);
+  assert.match(r.running, /de0dd692/);
+});
