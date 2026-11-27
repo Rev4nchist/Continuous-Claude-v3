@@ -192,5 +192,25 @@ describe('wait-ci: the pure core', () => {
     assert.equal(classify({ code: 0, json: null, stderr: '' }).kind, 'error', 'exit 0 with no JSON is not READY');
     assert.equal(classify({ code: 0, json: { ready: false, headShort: 'h' } }).kind, 'error', 'exit 0 but ready false is not READY');
     assert.equal(classify({ code: 7, json: {}, stderr: '' }).kind, 'error', 'an unknown exit code is an error, never wait');
+    assert.equal(classify({ code: 1, json: { ready: true, headShort: 'h' } }).kind, 'error', 'exit 1 with ready true contradicts itself: an error, never wait');
+    assert.equal(classify({ code: 1, json: { ready: false, headShort: 'h4', reasons: ['check "a" is queued/null'] } }).kind, 'wait', 'a queued check is not a failure');
+  });
+
+  it('C11: the loop polls at 0, every step and once at the limit, and sleeps only what is left', async () => {
+    const { waitForReady } = await import(pathToFileURL(WAIT_CI).href);
+    let t = 0;
+    const sleeps = [];
+    let polls = 0;
+    const r = await waitForReady({
+      pr: 9,
+      timeoutS: 1,
+      step: 400,
+      poll: () => { polls += 1; return { code: 1, json: { ready: false, headShort: 'h', reasons: [] } }; },
+      sleep: async (ms) => { sleeps.push(ms); t += ms; },
+      now: () => t,
+    });
+    assert.equal(r.exit, 75);
+    assert.deepEqual(sleeps, [400, 400, 200], 'the last sleep is cut to the time left');
+    assert.equal(polls, 4, 'polls at 0, 400, 800 and once at the limit 1000');
   });
 });
