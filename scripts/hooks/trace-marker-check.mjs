@@ -2,11 +2,11 @@
  * trace-marker-check -- the static half of "the tracer cannot die silently". hook-contract-guard.mjs calls it.
  *
  * The tracer (.claude/hooks/src/lib/trace-boot.ts) reaches every bundle through the esbuild `--inject` flag in
- * .claude/hooks/package.json scripts.build:raw (scripts.build runs the run-lock wrapper, which runs build:raw). Two things can remove it without any test failing: the flag leaves the build line,
+ * .claude/hooks/package.json, in the build line that runs esbuild (buildLineThatRuns: scripts.build, or scripts.build:raw behind the run-lock wrapper). Two things can remove it without any test failing: the flag leaves the build line,
  * or a dist is built before the flag existed. This check proves the REPO dist; the harness doctor's hooks:trace-fresh proves the live copy.
  *
  * Findings (kind):
- *   trace-inject-missing           scripts.build has no --inject:src/lib/trace-boot.ts
+ *   trace-inject-missing           the build line that runs esbuild has no --inject:src/lib/trace-boot.ts (or there is no build line)
  *   trace-marker-vacuous           no registered name has a dist file: 0 of 0 proves nothing
  *   trace-marker-missing           a registered name has a dist file without the marker
  *   trace-boot-call-missing        a dist has the marker but not the injected boot call (the marker alone does not prove the tracer runs:
@@ -22,20 +22,32 @@ export const TRACE_MARKER = '__CCV3_HOOK_TRACE_V1__';
 export const BOOT_CALL_TOKEN = '__CCV3_HOOK_TRACE_BOOT_V1__';
 const BOOT_CALL = new RegExp(`["']${BOOT_CALL_TOKEN}["']`);
 const INJECT_FLAG = '--inject:src/lib/trace-boot.ts';
+/** The wrapper script that scripts.build runs (card hook-build-run-lock). Behind it the esbuild line is scripts['build:raw']. */
+export const BUILD_WRAPPER = 'build-with-lock.mjs';
+
+/**
+ * The text of the build line that really runs esbuild, for every reader of the hooks package.json (this check and the vitest files that read the
+ * build line). scripts.build runs the wrapper: the line is scripts['build:raw'], or '' when there is none. Any other scripts.build is the line itself.
+ * A missing scripts.build gives '': a reader then finds no flag and fails closed.
+ */
+export function buildLineThatRuns(scripts) {
+  const build = String(scripts?.build ?? '');
+  if (build.includes(BUILD_WRAPPER)) return String(scripts?.['build:raw'] ?? '');
+  return build;
+}
 
 export function traceMarkerFindings({ hooksDir, names, minCount }) {
   const findings = [];
-  // `build` is the run-lock wrapper line; the esbuild line is `build:raw` (card hook-build-run-lock). Read build:raw first, then build. With neither
-  // holding the flag the check still fails.
-  let build = '';
+  // The line that RUNS esbuild carries the flag: `build` itself, or `build:raw` when `build` runs the run-lock wrapper (card hook-build-run-lock).
+  // A missing build line, a plain build line with no flag, or a wrapper with no flagged build:raw is a finding.
+  let runs = null;
   try {
-    const scripts = JSON.parse(readFileSync(join(hooksDir, 'package.json'), 'utf8')).scripts;
-    build = String(scripts?.['build:raw'] ?? scripts?.build ?? '');
+    runs = buildLineThatRuns(JSON.parse(readFileSync(join(hooksDir, 'package.json'), 'utf8')).scripts);
   } catch (err) {
-    findings.push({ kind: 'trace-inject-missing', detail: `cannot read scripts.build:raw or scripts.build in ${join(hooksDir, 'package.json')}: ${err.message}` });
+    findings.push({ kind: 'trace-inject-missing', detail: `cannot read scripts.build in ${join(hooksDir, 'package.json')}: ${err.message}` });
   }
-  if (build && !build.includes(INJECT_FLAG)) {
-    findings.push({ kind: 'trace-inject-missing', detail: `scripts.build:raw (or scripts.build when there is no build:raw) in ${join(hooksDir, 'package.json')} has no ${INJECT_FLAG}: a rebuild drops the tracer from every bundle.` });
+  if (runs !== null && !runs.includes(INJECT_FLAG)) {
+    findings.push({ kind: 'trace-inject-missing', detail: `the build line that runs esbuild (scripts.build, or scripts.build:raw behind ${BUILD_WRAPPER}) in ${join(hooksDir, 'package.json')} has no ${INJECT_FLAG}: a rebuild drops the tracer from every bundle.` });
   }
   const present = names.filter((n) => existsSync(join(hooksDir, 'dist', `${n}.mjs`)));
   if (!present.length) {
