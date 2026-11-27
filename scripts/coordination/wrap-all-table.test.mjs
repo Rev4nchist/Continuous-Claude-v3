@@ -439,7 +439,7 @@ test('W59: a lock past its expiresAt is named stale and still blocks', () => {
 });
 
 test('W60: a lock record with no kind, pid or session is unreadable: a warning and no READY row', () => {
-  for (const rec of [{ session: '#c64e660e' }, {}, null, 'x', [], { kind: 'pre-pr', pid: 'abc', session: '#c64e660e' }]) {
+  for (const rec of [{ session: '#c64e660e' }, {}, null, 'x', [], { kind: 'pre-pr', pid: 'abc', session: '#c64e660e' }, { pid: 4242, session: '#c64e660e' }, { kind: 'Pre PR!', pid: 4242, session: '#c64e660e' }]) {
     const t = W.buildTable(base({ locks: [rec], runLocks: 1 }));
     assert.ok(t.warnings.some((w) => /unreadable/i.test(w)), JSON.stringify(rec));
     assert.equal(t.rows.some((r) => r.stop === W.STOP.READY), false, JSON.stringify(rec));
