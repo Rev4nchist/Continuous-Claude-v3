@@ -1049,12 +1049,22 @@ function createCallOf(call: Call, r?: ParseResult): AstCreate | null {
   const args = w.slice(2);
   const valueFlag = (l: string | null | undefined): boolean => l != null && (API_FIELD.test(l) || API_VALUE.has(l));
   const endpoint = args.find((a, i) => a.lit !== null && !a.lit.startsWith('-') && !valueFlag(args[i - 1]?.lit));
-  if (!endpoint || !API_PULLS_PATH.test(endpoint.lit as string)) return null;
   const flags = args.map((a) => a.lit ?? '');
   const post = flags.some((l, i) => (/^(?:-X|--method)$/i.test(l) && /^POST$/i.test(flags[i + 1] ?? '')) || /^(?:-XPOST|--method=POST)$/i.test(l));
   const anyMethod = flags.some((l) => /^(?:-X|--method)/i.test(l));
   const field = flags.some((l) => /^(?:-[fF]|--(?:raw-field|field|input))/.test(l));
-  if (!post && !(field && !anyMethod)) return null;
+  const writes = post || (field && !anyMethod);
+  // C2d fix round (unread head, H1): an endpoint word with no literal (a variable in the repo path) is a create that the parse cannot read, when the call writes. A read (GET) keeps its allow.
+  if (!endpoint) {
+    // A create ends in a `pulls` segment. A literal last segment that is not pulls (.../runs/$id/rerun-failed-jobs, .../comments/$id/replies) cannot be a create; a last segment that holds a variable can.
+    // The query string (it may hold a slash) and the trailing slashes go first, so `pulls/` and `pulls?base=a/b` both end in `pulls`.
+    const tailOf = (raw: string): string => raw.replace(/['"]/g, '').replace(/\?[\s\S]*$/, '').replace(/\/+$/, '').split('/').pop() ?? '';
+    const mayCreate = (raw: string): boolean => { const t = tailOf(raw); return !raw.includes('/') || /^pulls$/i.test(t) || /[$`(]/.test(t); };
+    const unreadEndpoint = args.some((a, i) => a.lit === null && !a.raw.startsWith('-') && !valueFlag(args[i - 1]?.lit) && mayCreate(a.raw));
+    return writes && unreadEndpoint ? { read: BAD(NOT_LITERAL_WORD), cwdBefore, text } : null;
+  }
+  if (!API_PULLS_PATH.test(endpoint.lit as string)) return null;
+  if (!writes) return null;
   const lits: string[] = [];
   for (const a of args) {
     if (a.lit !== null) { lits.push(a.lit); continue; }
@@ -1098,6 +1108,14 @@ function withAstCreates(shapes: Shape[], parsed: Deps['parsed'], pwsh: boolean):
 
 // ---------- PR C2a: the land script and the in-segment parser shapes (union only, the hand reader still runs) ----------
 
+/**
+ * C2d fix round (unread head): a land call is cleanup only when the switch is a WORD of that call, bare or a literal true form. The text of the call is no test: a
+ * `-CleanupOnly` that sits inside another word (a quoted value, a substitution) is part of that word, so the call is a land. Stdin text keeps the old test.
+ */
+const CLEANUP_WORD_RE = /^-CleanupOnly(?::["']?\$?true["']?)?$/i;
+function callIsCleanup(c: Call): boolean {
+  return c.words.some((w) => CLEANUP_WORD_RE.test(w.raw)) || (c.stdin?.lit ? CLEANUP_RE.test(c.stdin.lit) : false);
+}
 /** One call of the parse that names the land script: its text, the PR and the sha read from that call's words alone, and the folders before it. */
 interface AstLandCall { text: string; pr: string | null; sha: string | null; cwdBefore: (string | null)[] }
 /**
@@ -1114,7 +1132,7 @@ function astLandCalls(parsed: Deps['parsed'], raw: string, exempt: boolean, gate
     const text0 = [...c.words.map((w) => w.raw), ...(c.stdin?.lit ? [c.stdin.lit] : [])].join(' ');
     const dtext = [...c.words.map((w) => w.lit ?? w.raw), ...(c.stdin?.lit ? [c.stdin.lit] : [])].join(' ');
     const text = LAND_SCRIPT_RE.test(text0) ? text0 : dtext;
-    if (!LAND_SCRIPT_RE.test(text) || CLEANUP_RE.test(text)) continue;
+    if (!LAND_SCRIPT_RE.test(text) || callIsCleanup(c)) continue;
     out.push({ text, pr: lastArg(text, LAND_PR_RE), sha: SHA_RE.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
   }
   // The text names the script but no call does (a path held in a variable, an Invoke-Expression, a pipe into a shell): one loose land call reads the whole text.
@@ -1518,6 +1536,26 @@ function hasMemberCall(parsed: NonNullable<Deps['parsed']>): boolean {
   return Object.values(parsed.byDialect).some((r) => r !== undefined && r !== null && r.kinds.includes(MEMBER_CALL_KIND));
 }
 /**
+ * C2d fix round, one rule for the unread head (Dave chose B, seat word 11-27 06:40). The shell gives a word no literal when a brace, a parameter expansion or a substitution builds it
+ * (`gh pr {merg,-b}e`, `gh pr ${x:-merge}`, `land-pr.p{s1,s1}`). A gh call whose subcommand or verb word has no literal, or a word that spells the land script and has no literal, names a head that
+ * this gate cannot read, and it fails closed at the rank of the create, land or merge (scope other: no tap clears it). A quoted value is no head: only a word with no quote or blank is tested for the script name.
+ */
+const LAND_NAME_WORD = /^[^\s'"`]*land-?pr/i;
+function hasUnreadHead(parsed: NonNullable<Deps['parsed']>): boolean {
+  for (const r of Object.values(parsed.byDialect)) {
+    for (const c of r ? r.calls : []) {
+      const w = c.words;
+      if (progName(w[0]?.lit) === 'gh') {
+        if (w[1] !== undefined && w[1].lit === null) return true;
+        if (w[1]?.lit?.toLowerCase() === 'pr' && w[2] !== undefined && w[2].lit === null) return true;
+      }
+      if (w.some((x) => x.lit === null && LAND_NAME_WORD.test(x.raw))) return true;
+    }
+  }
+  return false;
+}
+const UNREAD_HEAD_WHY = 'a gh call or the land script has a word that no literal gives (a brace, a parameter expansion or a substitution builds the verb, the endpoint or the script path), so this gate cannot read which create, land or merge runs. Fix: write the subcommand, the verb and the script path as plain words.';
+/**
  * The closed-world backstop of V7.6, as Dave decided it. When the text names a guarded call (the detector reads three views: raw, quote-blanked, quote-removed), the command is
  * allowed only when it is inert, else denied at the rank of the named call. A create, land or merge mention is ALWAYS checked, also beside a call that the parse resolved:
  * that call is judged by its own rules (tap, head, rank) AND every other call of the text must be listed (scope other). A mention of a push only (the push shapes have their own
@@ -1526,6 +1564,7 @@ function hasMemberCall(parsed: NonNullable<Deps['parsed']>): boolean {
  */
 export function notInertDenies(parsed: Deps['parsed'], resolved: boolean): Deny[] {
   if (!parsed || isStandaloneCleanup(parsed.text)) return [];
+  if (hasUnreadHead(parsed)) return [deny('not-inert', UNREAD_HEAD_WHY, 'other')];
   // raw, quote-blanked, quote-removed (a splice such as g""h) and escape-removed (g\h, land\-pr.ps1: bash gives such a word no literal, so no call names it)
   // C2d step 4: and the brace-flattened view ({"gh",pr} merge, gh {"pr",merge}): bash expands the brace into separate words, and the walker gives such a word no literal.
   const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ''), parsed.text.replace(/['"`\\]/g, ''), parsed.text.replace(/['"`\\{},]/g, ' ')];

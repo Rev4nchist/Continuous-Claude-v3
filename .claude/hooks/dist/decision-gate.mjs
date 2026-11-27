@@ -2681,12 +2681,22 @@ function createCallOf(call, r) {
   const args = w.slice(2);
   const valueFlag = (l) => l != null && (API_FIELD.test(l) || API_VALUE.has(l));
   const endpoint = args.find((a, i) => a.lit !== null && !a.lit.startsWith("-") && !valueFlag(args[i - 1]?.lit));
-  if (!endpoint || !API_PULLS_PATH.test(endpoint.lit)) return null;
   const flags = args.map((a) => a.lit ?? "");
   const post = flags.some((l, i) => /^(?:-X|--method)$/i.test(l) && /^POST$/i.test(flags[i + 1] ?? "") || /^(?:-XPOST|--method=POST)$/i.test(l));
   const anyMethod = flags.some((l) => /^(?:-X|--method)/i.test(l));
   const field = flags.some((l) => /^(?:-[fF]|--(?:raw-field|field|input))/.test(l));
-  if (!post && !(field && !anyMethod)) return null;
+  const writes = post || field && !anyMethod;
+  if (!endpoint) {
+    const tailOf = (raw) => raw.replace(/['"]/g, "").replace(/\?[\s\S]*$/, "").replace(/\/+$/, "").split("/").pop() ?? "";
+    const mayCreate = (raw) => {
+      const t = tailOf(raw);
+      return !raw.includes("/") || /^pulls$/i.test(t) || /[$`(]/.test(t);
+    };
+    const unreadEndpoint = args.some((a, i) => a.lit === null && !a.raw.startsWith("-") && !valueFlag(args[i - 1]?.lit) && mayCreate(a.raw));
+    return writes && unreadEndpoint ? { read: BAD(NOT_LITERAL_WORD), cwdBefore, text } : null;
+  }
+  if (!API_PULLS_PATH.test(endpoint.lit)) return null;
+  if (!writes) return null;
   const lits = [];
   for (const a of args) {
     if (a.lit !== null) {
@@ -2728,6 +2738,10 @@ function withAstCreates(shapes, parsed, pwsh) {
   });
   return [...shapes, ...extra];
 }
+var CLEANUP_WORD_RE = /^-CleanupOnly(?::["']?\$?true["']?)?$/i;
+function callIsCleanup(c) {
+  return c.words.some((w) => CLEANUP_WORD_RE.test(w.raw)) || (c.stdin?.lit ? CLEANUP_RE.test(c.stdin.lit) : false);
+}
 function astLandCalls(parsed, raw, exempt, gate) {
   const unq = (t) => t.replace(/['"`]/g, "");
   if (!parsed || exempt || !LAND_SCRIPT_RE.test(unq(raw)) || !LAND_SCRIPT_RE.test(unq(gate))) return [];
@@ -2736,7 +2750,7 @@ function astLandCalls(parsed, raw, exempt, gate) {
     const text0 = [...c.words.map((w) => w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
     const dtext = [...c.words.map((w) => w.lit ?? w.raw), ...c.stdin?.lit ? [c.stdin.lit] : []].join(" ");
     const text = LAND_SCRIPT_RE.test(text0) ? text0 : dtext;
-    if (!LAND_SCRIPT_RE.test(text) || CLEANUP_RE.test(text)) continue;
+    if (!LAND_SCRIPT_RE.test(text) || callIsCleanup(c)) continue;
     out3.push({ text, pr: lastArg(text, LAND_PR_RE), sha: SHA_RE.exec(text)?.[1]?.toLowerCase() ?? null, cwdBefore: c.cwdBefore ?? [] });
   }
   if (out3.length === 0 && !CLEANUP_RE.test(raw)) out3.push({ text: raw, pr: lastArg(raw, LAND_PR_RE), sha: SHA_RE.exec(raw)?.[1]?.toLowerCase() ?? null, cwdBefore: [] });
@@ -3025,8 +3039,24 @@ var MEMBER_CALL_KIND = "InvokeMemberExpressionAst";
 function hasMemberCall(parsed) {
   return Object.values(parsed.byDialect).some((r) => r !== void 0 && r !== null && r.kinds.includes(MEMBER_CALL_KIND));
 }
+var LAND_NAME_WORD = /^[^\s'"`]*land-?pr/i;
+function hasUnreadHead(parsed) {
+  for (const r of Object.values(parsed.byDialect)) {
+    for (const c of r ? r.calls : []) {
+      const w = c.words;
+      if (progName(w[0]?.lit) === "gh") {
+        if (w[1] !== void 0 && w[1].lit === null) return true;
+        if (w[1]?.lit?.toLowerCase() === "pr" && w[2] !== void 0 && w[2].lit === null) return true;
+      }
+      if (w.some((x) => x.lit === null && LAND_NAME_WORD.test(x.raw))) return true;
+    }
+  }
+  return false;
+}
+var UNREAD_HEAD_WHY = "a gh call or the land script has a word that no literal gives (a brace, a parameter expansion or a substitution builds the verb, the endpoint or the script path), so this gate cannot read which create, land or merge runs. Fix: write the subcommand, the verb and the script path as plain words.";
 function notInertDenies(parsed, resolved) {
   if (!parsed || isStandaloneCleanup(parsed.text)) return [];
+  if (hasUnreadHead(parsed)) return [deny("not-inert", UNREAD_HEAD_WHY, "other")];
   const views = [parsed.text, blankQuotes(parsed.text), parsed.text.replace(/['"`]/g, ""), parsed.text.replace(/['"`\\]/g, ""), parsed.text.replace(/['"`\\{},]/g, " ")];
   if (!views.some((v) => GUARDED_TEXT.test(v))) return [];
   const denyClass = views.some((v) => DENY_CLASS_TEXT.test(v));
