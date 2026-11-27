@@ -135,7 +135,7 @@ describe('R: the not-inert reason names the real lists (seat 11-26)', () => {
     expect(d.action).toBe('deny');
     const why = d.action === 'deny' ? d.reason : '';
     expect(why).toContain('Fix: run the guarded call as its own command');
-    for (const name of ['echo', 'set-content', 'cat', 'head', 'get-content', 'sls', 'get-ciminstance', 'gh', 'git', 'claude', 'curl', 'ntn', 'pr', 'api', 'env', 'timeout', 'sudo']) expect(why, name).toContain(name);
+    for (const name of ['echo', 'set-content', 'cat', 'head', 'get-content', 'sls', 'get-ciminstance', 'gh', 'git', 'claude', 'curl', 'ntn', 'pr', 'api', 'env', 'timeout']) expect(why, name).toContain(name);
   });
 });
 

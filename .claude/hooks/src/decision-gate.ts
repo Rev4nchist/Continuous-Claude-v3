@@ -4506,12 +4506,18 @@ const envMs = (v: unknown): number | undefined => { const n = Number(v); return 
 
 // ---- the wrapper table: a wrapper program is read through, so the call it runs is judged like the bare call (the way shell-ast xargsInner does for xargs) ----
 // A wrapper with a word that no literal gives, or with no inner call, stays a call of its own and is off the lists (closed world): a wrong arity fails closed.
-const WRAPPER_ARITY: Record<string, { value: Set<string>; duration?: true; assigns?: true }> = {
-  env: { value: new Set(['-u', '-C', '-S', '--unset', '--chdir', '--split-string']), assigns: true },
+// The table holds only options that do not change WHERE the inner program runs (a folder, a root), AS WHOM (a user, a group, a login shell), WITH WHICH ENVIRONMENT (-i, -u,
+// an assignment of GH_REPO, GH_HOST, GIT_DIR and the like) or HOW ITS WORDS ARE READ (env -S): a wrapper with any other option is off the lists. sudo is not in the table at all.
+// noOptions: the wrapper takes no option; any word that starts with a dash leaves it off the lists. assigns: NAME=value words are read through only for the names of SAFE_ENV_ASSIGN.
+const WRAPPER_ARITY: Record<string, { value: Set<string>; duration?: true; assigns?: true; noOptions?: true }> = {
+  env: { value: new Set(), assigns: true, noOptions: true },
   timeout: { value: new Set(['-k', '-s', '--kill-after', '--signal']), duration: true },
-  nohup: { value: new Set() }, nice: { value: new Set(['-n', '--adjustment']) }, command: { value: new Set() }, builtin: { value: new Set() },
-  exec: { value: new Set(['-a']) }, sudo: { value: new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-R', '-T', '-U']) }, stdbuf: { value: new Set(['-i', '-o', '-e']) },
+  nice: { value: new Set(['-n', '--adjustment']) },
+  stdbuf: { value: new Set(['-i', '-o', '-e']) },
+  nohup: { value: new Set(), noOptions: true }, command: { value: new Set(), noOptions: true }, builtin: { value: new Set(), noOptions: true }, exec: { value: new Set(), noOptions: true },
 };
+/** The environment variables that env may set and still be read through: they change a prompt, a colour, a locale or a time zone, never a repository, a host, a folder or a program. */
+const SAFE_ENV_ASSIGN = /^(?:GH_PROMPT_DISABLED|GH_NO_UPDATE_NOTIFIER|GH_SPINNER_DISABLED|NO_COLOR|CLICOLOR|CI|TERM|LANG|LC_[A-Z_]+|TZ)=/;
 function unwrapCall(c: ParsedCall): ParsedCall | null {
   const l = litOf(c.words[0]);
   const p = l === null || /[\\/]/.test(l) ? null : progName(l);
@@ -4521,9 +4527,10 @@ function unwrapCall(c: ParsedCall): ParsedCall | null {
   for (; i < c.words.length; i++) {
     const w = litOf(c.words[i]);
     if (w === null) return null; // a word no literal gives: the wrapper stays a call of its own, off the list
+    if (a.noOptions && w.startsWith('-')) return null; // an option of a wrapper that takes none (env -C, env -u, env -S, exec -c): the wrapper stays off the lists
     if (a.value.has(w)) { i++; continue; }
     if (w.startsWith('-')) continue;
-    if (a.assigns && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    if (a.assigns && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) { if (!SAFE_ENV_ASSIGN.test(w)) return null; continue; }
     if (needDuration) { needDuration = false; continue; }
     break;
   }

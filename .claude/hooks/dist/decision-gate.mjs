@@ -5079,16 +5079,16 @@ var envMs = (v) => {
   return Number.isFinite(n) && n > 0 ? n : void 0;
 };
 var WRAPPER_ARITY = {
-  env: { value: /* @__PURE__ */ new Set(["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]), assigns: true },
+  env: { value: /* @__PURE__ */ new Set(), assigns: true, noOptions: true },
   timeout: { value: /* @__PURE__ */ new Set(["-k", "-s", "--kill-after", "--signal"]), duration: true },
-  nohup: { value: /* @__PURE__ */ new Set() },
   nice: { value: /* @__PURE__ */ new Set(["-n", "--adjustment"]) },
-  command: { value: /* @__PURE__ */ new Set() },
-  builtin: { value: /* @__PURE__ */ new Set() },
-  exec: { value: /* @__PURE__ */ new Set(["-a"]) },
-  sudo: { value: /* @__PURE__ */ new Set(["-u", "-g", "-h", "-p", "-C", "-D", "-R", "-T", "-U"]) },
-  stdbuf: { value: /* @__PURE__ */ new Set(["-i", "-o", "-e"]) }
+  stdbuf: { value: /* @__PURE__ */ new Set(["-i", "-o", "-e"]) },
+  nohup: { value: /* @__PURE__ */ new Set(), noOptions: true },
+  command: { value: /* @__PURE__ */ new Set(), noOptions: true },
+  builtin: { value: /* @__PURE__ */ new Set(), noOptions: true },
+  exec: { value: /* @__PURE__ */ new Set(), noOptions: true }
 };
+var SAFE_ENV_ASSIGN = /^(?:GH_PROMPT_DISABLED|GH_NO_UPDATE_NOTIFIER|GH_SPINNER_DISABLED|NO_COLOR|CLICOLOR|CI|TERM|LANG|LC_[A-Z_]+|TZ)=/;
 function unwrapCall(c) {
   const l = litOf(c.words[0]);
   const p = l === null || /[\\/]/.test(l) ? null : progName(l);
@@ -5099,12 +5099,16 @@ function unwrapCall(c) {
   for (; i < c.words.length; i++) {
     const w = litOf(c.words[i]);
     if (w === null) return null;
+    if (a.noOptions && w.startsWith("-")) return null;
     if (a.value.has(w)) {
       i++;
       continue;
     }
     if (w.startsWith("-")) continue;
-    if (a.assigns && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue;
+    if (a.assigns && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+      if (!SAFE_ENV_ASSIGN.test(w)) return null;
+      continue;
+    }
     if (needDuration) {
       needDuration = false;
       continue;

@@ -196,12 +196,24 @@ describe('D: a wrapper option that moves the directory, or changes how the progr
     ['env --chdir=DIR', `env --chdir=/repo ${MERGE}`],
     ['env --chdir DIR', `env --chdir /repo ${MERGE}`],
     ['env -S (a split string runs another command line)', `env -S 'gh pr merge 7' ${MERGE}`],
+    ['env -u NAME (unsets a variable such as GH_REPO)', `env -u GH_REPO ${MERGE}`],
+    ['env -i (an empty environment)', `env -i ${MERGE}`],
+    ['env GH_REPO=OTHER (another repository)', `env GH_REPO=acme/app-x ${MERGE}`],
+    ['env GH_HOST=OTHER (another host)', `env GH_HOST=ghe.example.com ${MERGE}`],
+    ['env GIT_DIR=DIR (another repository)', `env GIT_DIR=/srv/x/.git ${MERGE}`],
+    ['env PATH=DIR (another program)', `env PATH=/tmp/bin ${MERGE}`],
+    ['exec -c (an empty environment)', `exec -c ${MERGE}`],
+    ['exec -a NAME', `exec -a name ${MERGE}`],
+    ['nohup with an option', `nohup -x ${MERGE}`],
+    ['command -p (the default PATH)', `command -p ${MERGE}`],
+    ['sudo, any form (as whom: a user, a root, a folder, a login shell)', `sudo -u root ${MERGE}`],
     ['sudo -D DIR', `sudo -D /repo ${MERGE}`],
     ['sudo --chdir=DIR', `sudo --chdir=/repo ${MERGE}`],
     ['sudo -R DIR (chroot)', `sudo -R /srv ${MERGE}`],
     ['sudo --chroot=DIR', `sudo --chroot=/srv ${MERGE}`],
     ['sudo -s (a shell)', `sudo -s ${MERGE}`],
     ['sudo -i (a login shell)', `sudo -i ${MERGE}`],
+    ['sudo with no option', `sudo ${MERGE}`],
   ] as const;
   it.each(dirOptions)('%s: denied, even with the tap', async (_name, text) => {
     landTap(7);
@@ -209,8 +221,10 @@ describe('D: a wrapper option that moves the directory, or changes how the progr
   });
   it('(paired) the same wrappers with no such option are read through and allowed with the tap', async () => {
     landTap(7);
-    expect(await verdict(`env FOO=1 ${MERGE}`)).toBe('allow');
-    expect(await verdict(`sudo -u root ${MERGE}`)).toBe('allow');
+    expect(await verdict(`env GH_PROMPT_DISABLED=1 ${MERGE}`)).toBe('allow');
+    expect(await verdict(`env NO_COLOR=1 TZ=UTC ${MERGE}`)).toBe('allow');
+    expect(await verdict(`timeout -k 5 60 ${MERGE}`)).toBe('allow');
+    expect(await verdict(`nice -n 5 ${MERGE}`)).toBe('allow');
   });
 });
 
@@ -218,12 +232,11 @@ describe('W: the wrapper table fails closed (a correct arity is judged like the 
   const MERGE = `gh pr merge 7 --squash --match-head-commit ${HEAD}`;
   // `time` is a reserved word of bash (a TimeClause in the parse), not a call, so it is not in the table. [wrapper, a correct form, a wrong arity form]. With a tap for PR 7 the correct form is allowed. The wrong form hands the wrapper's option value to the program word, so it must be denied.
   const table: [string, string, string][] = [
-    ['env', `env -u FOO ${MERGE}`, `env -u ${MERGE}`],
+    ['env', `env GH_PROMPT_DISABLED=1 ${MERGE}`, `env -u ${MERGE}`],
     ['timeout', `timeout -k 5 60 ${MERGE}`, `timeout -k ${MERGE}`],
     ['nice', `nice -n 5 ${MERGE}`, `nice -n ${MERGE}`],
-    ['sudo', `sudo -u root ${MERGE}`, `sudo -u ${MERGE}`],
     ['stdbuf', `stdbuf -o L ${MERGE}`, `stdbuf -o ${MERGE}`],
-    ['exec', `exec -a name ${MERGE}`, `exec -a ${MERGE}`],
+    ['exec', `exec ${MERGE}`, `exec -a ${MERGE}`],
     ['nohup', `nohup ${MERGE}`, `nohup FOO=1 ${MERGE}`],
     ['command', `command ${MERGE}`, `command FOO=1 ${MERGE}`],
     ['builtin', `builtin ${MERGE}`, `builtin FOO=1 ${MERGE}`],
