@@ -222,12 +222,24 @@ describe('inbox --wait: what it never does', () => {
   it('W10: no connection stays open between polls', async () => {
     const c = newCase('w10');
     const bg = laneBg(c, ['inbox', '--wait', '--timeout', '6'], { extra: { LANE_ALLOW_AS: '1', LANE_WAIT_POLL_MS: '2500' } });
-    await sleep(1500); // after the first poll, inside the first sleep
+    // No fixed sleep: a slow runner needs longer than 1.5 s for the first poll (it failed in CI that way). Sample every 100 ms for the whole
+    // wait. A wait that opens and closes a connection for each poll shows one connection (a poll), then none (the 2.5 s sleep after it).
+    // A wait that holds one connection for the whole wait never shows none after it showed one.
     const dbName = new URL(s.url).pathname.slice(1);
-    const open = (await s.db.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [dbName])).rows[0].n;
+    let finished = false;
+    bg.done.then(() => { finished = true; });
+    let sawConnection = false;
+    let sawNoneAfter = false;
+    while (!finished) {
+      const open = (await s.db.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [dbName])).rows[0].n;
+      if (open > 0) sawConnection = true;
+      else if (sawConnection) sawNoneAfter = true;
+      await sleep(100);
+    }
     const r = await bg.done;
     assert.equal(r.code, 75, r.err);
-    assert.equal(open, 0, 'the wait holds no database connection while it sleeps');
+    assert.ok(sawConnection, 'the samples saw the waiter poll at least once');
+    assert.ok(sawNoneAfter, 'the wait holds no database connection while it sleeps');
   });
 });
 
