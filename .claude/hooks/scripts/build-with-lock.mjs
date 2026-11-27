@@ -53,7 +53,13 @@ async function loadLock() {
 
 async function main() {
   const { minutes, cmd } = parse(process.argv.slice(2));
-  const command = cmd.length ? cmd : [process.execPath, process.env.npm_execpath || 'npm', 'run', 'build:raw'];
+  if (!cmd.length && !process.env.npm_execpath) {
+    // Run by hand, there is no npm cli script to start: refuse at once, with no lock and no build.
+    process.stderr.write('hook-build-lock: run the build through npm: cd .claude/hooks && npm run build (this file needs npm_execpath, which npm sets)\n');
+    process.exitCode = 1;
+    return;
+  }
+  const command = cmd.length ? cmd : [process.execPath, process.env.npm_execpath, 'run', 'build:raw'];
   const RL = await loadLock();
   const pid = process.pid;
   const head = headOf();

@@ -2137,6 +2137,16 @@ test('HB5: a build that outlives its expiry still releases its own lock', () => 
   assert.equal(runsOf(dir).filter((x) => x.event === 'end' && x.kind === 'hook-build').length, 1);
 });
 
+test('HB7: run by hand with no command and no npm, the wrapper refuses at once with one clear line, exit 1, no lock and no run line', () => {
+  const dir = mk('hbl-');
+  const r = runWrapper(dir, [], { npm_execpath: '' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^hook-build-lock: run the build through npm/m);
+  assert.equal(r.stderr.trim().split(/\r?\n/).length, 1, r.stderr);
+  assert.deepEqual(hookLocks(dir), []);
+  assert.deepEqual(runsOf(dir), []);
+});
+
 test('HB6: the build script of the hooks folder runs through the wrapper and keeps the old line as build:raw', () => {
   const pkg = JSON.parse(readFileSync(join(HOOKS, 'package.json'), 'utf8'));
   assert.match(pkg.scripts.build, /scripts\/build-with-lock\.mjs/);
