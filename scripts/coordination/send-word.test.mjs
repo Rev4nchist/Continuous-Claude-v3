@@ -427,3 +427,57 @@ describe('W21 a say that outlives the say timeout is unconfirmed', () => {
     assert.match(fs.readFileSync(c.logFile, 'utf8'), /UNCONFIRMED: alpha/);
   });
 });
+
+// Card coord-edge-batch-1127. W22 and W23 fail on main 110d007a.
+//   W22  the quote trigger is a space, a tab or a double quote (libuv quote_cmd_arg): a newline or carriage return alone wraps nothing
+//   W23  commandUnits takes the longest receiver by escaped units, not by raw length
+describe('W22 the count quotes an argument only on a space, a tab or a double quote', () => {
+  it('a newline or a carriage return alone adds no quotes', async () => {
+    const { escapedUnits } = await import(pathToFileURL(SEND).href);
+    assert.equal(escapedUnits('a\nb'), 3);
+    assert.equal(escapedUnits('a\r\nb'), 4);
+    assert.equal(escapedUnits('a\fb'), 3);
+  });
+  it('a space, a tab or a double quote still wraps (guards)', async () => {
+    const { escapedUnits } = await import(pathToFileURL(SEND).href);
+    assert.equal(escapedUnits('a b'), 5);
+    assert.equal(escapedUnits('a\tb'), 5);
+    assert.equal(escapedUnits('a"b'), 6);
+  });
+  // The count must match what Windows takes. The largest plain token (newlines at the end, no space, tab or quote) that the real spawn takes is found
+  // by bisection; the count of that command line must be the proven Windows limit, 32766, and the next token one unit longer must not spawn.
+  const onWindows = process.platform === 'win32';
+  it('the real spawn takes a plain token with newlines up to the counted limit and refuses one unit more', { skip: onWindows ? false : 'the Windows command line limit' }, async () => {
+    const { escapedUnits } = await import(pathToFileURL(SEND).href);
+    const head = [process.execPath, '-e', '0'];
+    const tokenOf = (len) => `${'x'.repeat(len - 2)}\n\n`;
+    // A token counts as too long only for the command line length error Windows gives (ENAMETOOLONG on this machine). Any other spawn error or a
+    // non-zero exit (a spawn that fails under load) throws with its code, so the bisection never lands low for a wrong reason.
+    const spawns = (len) => {
+      const r = spawnSync(head[0], [...head.slice(1), tokenOf(len)], { encoding: 'utf8' });
+      if (r.error) {
+        if (r.error.code === 'ENAMETOOLONG') return false;
+        throw new Error(`the spawn failed with ${r.error.code}, not the command line length error`);
+      }
+      if (r.status !== 0) throw new Error(`the spawn exited with ${r.status} (signal ${r.signal})`);
+      return true;
+    };
+    let lo = 3; let hi = 40000; // lo spawns, hi does not
+    assert.ok(spawns(lo) && !spawns(hi));
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (spawns(mid)) lo = mid; else hi = mid; }
+    const count = (len) => [...head, tokenOf(len)].reduce((n, a) => n + escapedUnits(a), 0) + head.length;
+    assert.equal(count(lo), 32766, 'the largest token that spawns is counted as the 32766 unit command line');
+    assert.equal(count(hi), 32767, 'one unit more is counted over the limit');
+  });
+});
+
+describe('W23 the longest receiver is the one with the most escaped units', () => {
+  it('a short name full of quotes beats a longer plain name', async () => {
+    const { commandUnits } = await import(pathToFileURL(SEND).href);
+    assert.equal(commandUnits('x', ['aaaa', '""'], 'l'), commandUnits('x', ['""'], 'l'));
+  });
+  it('with plain names the longest raw name still wins (guard)', async () => {
+    const { commandUnits } = await import(pathToFileURL(SEND).href);
+    assert.equal(commandUnits('x', ['aa', 'bbbb'], 'l'), commandUnits('x', ['bbbb'], 'l'));
+  });
+});

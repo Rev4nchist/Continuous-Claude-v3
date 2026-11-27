@@ -30,7 +30,7 @@ export const STEPS = ['commit-and-push', 'open-pr', 'land', 'paid-round', 'cli-s
 // A command mention: the step word is followed by a flag, by punctuation that closes the mention, or by the end of the line. Prose such as
 // "a ship-ask cap-override question" names the step as a noun and is no mention. The rest of the line ends at the next ship-ask, so two commands
 // on one line are each checked.
-const MENTION = new RegExp(`ship-ask(?:\\.mjs)?\\s+(${STEPS.join('|')})(?![\\w-])(?=\\s+--|\\s*[)\`'".,;:]|\\s*$)((?:(?!ship-ask)[^\\n])*)`, 'g');
+const MENTION = new RegExp(`ship-ask(?:\\.mjs)?\\s+(${STEPS.join('|')})(?![\\w-])(?=\\s+--|\\s*[)\`'".,;:]|\\s*$)((?:(?!ship-ask[ .])[^\\n])*)`, 'g');
 
 const OWNED = [
   'scripts/github/land-pr.ps1',
@@ -112,6 +112,9 @@ describe('T3 the finder', () => {
     const bad = (text) => mentionsOf(text).filter((m) => !m.ok).length;
     assert.equal(bad('ship-ask land --json, then ship-ask open-pr.'), 1, 'good then bad');
     assert.equal(bad('ship-ask land, then ship-ask open-pr --json'), 1, 'bad then good');
+    // The cut is only at ship-ask followed by a space or a dot: a branch or a path that holds the word does not end the rest of the line.
+    assert.equal(bad('ship-ask cli-skip --branch coord/ship-ask-x --json'), 0, 'a branch that holds the word, flag after it');
+    assert.equal(bad('ship-ask land --branch coord/ship-ask-x'), 1, 'a branch that holds the word, no flag (guard)');
     assert.equal(bad('ship-ask land --json, then ship-ask open-pr --text'), 0, 'good and good');
     assert.equal(bad('ship-ask land, then ship-ask open-pr.'), 2, 'bad and bad');
   });
