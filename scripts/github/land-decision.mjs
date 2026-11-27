@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // land-decision.mjs - the land-pr.ps1 check of Dave's land tap (pathway flow v2, design N4).
 //
-// Dave answers the "Land" question (ship-ask.mjs land) with AskUserQuestion. The decision-ledger hook writes his tap to the decision
+// Dave answers the "Land" question (ship-ask.mjs land --json) with AskUserQuestion. The decision-ledger hook writes his tap to the decision
 // store (lib/decisions.mjs). land-pr.ps1 calls this script when decisions.enforce is true:
 //   check <pr> --repo <o/r> --head <sha>   exit 0 when the tap for (PR, head) is "Land now" or "Land when READY"; 1 = refused; 2 = bad usage.
 //   use   <pr> --repo <o/r> --head <sha>   uses the tap up. land-pr.ps1 calls it AFTER the merge succeeds, never before.

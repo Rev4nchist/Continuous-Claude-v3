@@ -332,7 +332,7 @@ slot and posts `@coderabbitai review`. The state file is `~/.claude/state/codera
   a rate limit, not at 30 minutes, not after a fix push. A second post only burns a slot.
 - A CRITICAL PR queued 30 minutes gets a paid ask. A queued PR 60 minutes old is `timed-out`. Both toasts
   offer a paid round or a wait. Only Dave's tap starts a paid round: ask the Paid round question
-  (`ship-ask.mjs paid-round --pr <N>`). It has a Yes row only when `cr-paid.mjs` says ALLOW. On ESCALATE or
+  (`ship-ask.mjs paid-round --pr <N> --json`). It has a Yes row only when `cr-paid.mjs` says ALLOW. On ESCALATE or
   no verdict it offers no paid round, only free options, and the question says why. A paid round posts only after ALLOW and his tap on Yes.
 - A timed-out PR is still not READY. READY needs a CodeRabbit review of the head. On the STALLED line,
   run the principal-reviewer agent on the head (not in fast mode) and report its findings. Do not post.
