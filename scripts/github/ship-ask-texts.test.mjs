@@ -112,6 +112,9 @@ describe('T3 the finder', () => {
     const bad = (text) => mentionsOf(text).filter((m) => !m.ok).length;
     assert.equal(bad('ship-ask land --json, then ship-ask open-pr.'), 1, 'good then bad');
     assert.equal(bad('ship-ask land, then ship-ask open-pr --json'), 1, 'bad then good');
+    // The cut is only at ship-ask followed by a space or a dot: a branch or a path that holds the word does not end the rest of the line.
+    assert.equal(bad('ship-ask cli-skip --branch coord/ship-ask-x --json'), 0, 'a branch that holds the word, flag after it');
+    assert.equal(bad('ship-ask land --branch coord/ship-ask-x'), 1, 'a branch that holds the word, no flag (guard)');
     assert.equal(bad('ship-ask land --json, then ship-ask open-pr --text'), 0, 'good and good');
     assert.equal(bad('ship-ask land, then ship-ask open-pr.'), 2, 'bad and bad');
   });
