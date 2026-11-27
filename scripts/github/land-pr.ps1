@@ -22,7 +22,7 @@
      stale or foreign record refuses (nothing merged). The provenance line goes into the LANDED summary. With
      -IgnoreReview the check still runs as a warning only: it prints the line or a WARNING, and the merge goes on.
   1c2. Land tap (scripts/github/land-decision.mjs): when decisions.enforce is true in <RepoPath>/review-router.config.json or in the config of the checkout this script runs from (the stricter wins), Dave's
-     "Land now" or "Land when READY" answer (AskUserQuestion, ship-ask.mjs land) must be on record for this PR at this exact head.
+     "Land now" or "Land when READY" answer (AskUserQuestion, ship-ask.mjs land --pr N --json) must be on record for this PR at this exact head.
      Nothing else lands it. It runs before the READY check, in both branches, under -IgnoreReview too. The tap is used up AFTER the merge
      succeeds. With the flag false or missing, it prints a WARNING line and does not block.
   1d. Migration gate (scripts/github/migration-gate.mjs): when the PR adds a drizzle migration, the live database
@@ -530,7 +530,7 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     $ld.Out | Out-Host
     if ($landCode) { Fail "land decision check refused #$Pr (exit $landCode). Nothing was merged. Ask Dave the Land question (see the line above), then re-run." }
   } else {
-    Write-Host "  WARNING: decisions.enforce is not true, so no land decision from Dave is required for #$Pr. Ask the Land question anyway (ship-ask.mjs land --pr $Pr)." -ForegroundColor Yellow
+    Write-Host "  WARNING: decisions.enforce is not true, so no land decision from Dave is required for #$Pr. Ask the Land question anyway (ship-ask.mjs land --pr $Pr --json)." -ForegroundColor Yellow
   }
   if (-not $IgnoreReview) {
     Step "ready check for #$Pr at $($head.Substring(0,7))"

@@ -72,18 +72,24 @@ describe('T1 the owned files hold no bad mention', () => {
   }
 });
 
+/** The two ways the open list can be wrong: a file with a bad mention that is not on it, and an entry whose file has no bad mention any more. */
+export function openProblems(withBad, open) {
+  return { unlisted: withBad.filter((f) => !(f in open)), stale: Object.keys(open).filter((f) => !withBad.includes(f)) };
+}
+
 describe('T2 the open list is exact, and no other file has a bad mention', () => {
-  const files = treeFiles();
-  const withBad = files.filter((f) => !OWNED.includes(f) && bad(f).length > 0);
+  const withBad = treeFiles().filter((f) => !OWNED.includes(f) && bad(f).length > 0);
+  const problems = openProblems(withBad, OPEN);
   it('every file with a bad mention is on the open list', () => {
-    const unlisted = withBad.filter((f) => !(f in OPEN));
-    assert.deepEqual(unlisted, [], `a bad mention in a file that is on no list: ${unlisted.join(', ')}`);
+    assert.deepEqual(problems.unlisted, [], `a bad mention in a file that is on no list: ${problems.unlisted.join(', ')}`);
   });
-  for (const [rel, owner] of Object.entries(OPEN)) {
-    it(`open entry ${rel} (${owner}) still has a bad mention`, () => {
-      assert.ok(withBad.includes(rel), `${rel} has no bad mention any more: delete its entry from OPEN`);
-    });
-  }
+  it('every open entry still has a bad mention', () => {
+    assert.deepEqual(problems.stale, [], `no bad mention any more: delete the entry from OPEN (${problems.stale.map((f) => `${f}, owner ${OPEN[f]}`).join('; ')})`);
+  });
+  it('the check itself: an unlisted file and a stale entry are both reported', () => {
+    const p = openProblems(['a.md', 'b.md'], { 'b.md': 'card x', 'c.md': 'card y' });
+    assert.deepEqual(p, { unlisted: ['a.md'], stale: ['c.md'] });
+  });
 });
 
 describe('T3 the finder', () => {

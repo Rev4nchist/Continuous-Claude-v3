@@ -66,6 +66,9 @@ jobs:
       - name: wait-ci unit tests
         timeout-minutes: 5
         run: node --test scripts/github/wait-ci.test.mjs
+      - name: ship-ask text mentions
+        timeout-minutes: 5
+        run: node --test scripts/github/ship-ask-texts.test.mjs
       - name: dev-server-notice-check unit tests
         timeout-minutes: 5
         run: node --test apps/agentic-os/scripts/dev-server-notice-check.test.mjs
