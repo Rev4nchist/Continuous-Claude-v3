@@ -580,3 +580,54 @@ describe('S34 to S38: UTF-16 files, context edges, dotted capital I, fullwidth i
     assert.match(alone.out, /usage:/);
   });
 });
+
+describe('S42 to S44: overlapping string ids and a byte order mark (card scan-listed-overlap-mask)', () => {
+  // Made-up string ids. OV_A ends where OV_B starts, so the text "rv-abcd-zzzz" holds both and they share "abcd".
+  const OV_A = 'rv-abcd';
+  const OV_B = 'abcd-zzzz';
+  const SELF = 'ab-ab';
+  const idRoot = (...ids) => listRoot({ dataset: { prs: [{ pr: Number(HOLD4) }], findings: [{ pr: Number(HOLD4), comment_id: Number(COMMENT) }, ...ids.map((id) => ({ pr: Number(HOLD4), comment_id: id }))] } });
+  /** True when the context holds a piece of `secret` of `n` characters or more (case blind). */
+  const leaks = (secret, ctx, n) => { const s = secret.toLowerCase(); const c = ctx.toLowerCase(); for (let i = 0; i + n <= s.length; i++) if (c.includes(s.slice(i, i + n))) return true; return false; };
+
+  it('S42 two listed string ids that overlap are both hidden whole: no tail of either reaches a context, and gate stays the matcher count', () => {
+    const root = idRoot(OV_A, OV_B);
+    const text = `see ${OV_A}-zzzz now, and ${OV_A.slice(0, 3)}${OV_B} later`;
+    const r = scan(root, text);
+    assert.equal(r.gate, countListed(text, readIdList(root)));
+    assert.ok(r.hits.length >= 2, 'both string ids must have a place');
+    for (const h of r.hits) {
+      assert.ok(!leaks(OV_A, h.ctx, 4), 'a piece of the first string id reached a context');
+      assert.ok(!leaks(OV_B, h.ctx, 4), 'a piece of the second string id reached a context');
+    }
+    const plain = run(['--root', root, put(text)]);
+    assert.ok(!leaks(OV_B, plain.out, 5), 'a tail reached the plain output');
+  });
+  it('S43 a string id that overlaps itself has a place for each copy and is hidden whole', () => {
+    const root = idRoot(SELF);
+    const r = scan(root, `x${SELF}-ab y`);
+    assert.deepEqual(r.hits.filter((h) => h.rule === 'token').map((h) => h.col), [2, 5], 'one place for each copy');
+    for (const h of r.hits) assert.ok(!leaks(SELF, h.ctx, 3), 'a piece of the string id reached a context');
+  });
+  it('S45 two overlapping listed string ids in a file name are hidden whole in the label', () => {
+    const root = idRoot(OV_A, OV_B);
+    const f = path.join(folder(), `x-${OV_A}-zzzz-y.md`);
+    fs.writeFileSync(f, `PR ${HOLD4}
+`);
+    const r = run(['--root', root, '--json', f]);
+    const label = JSON.parse(r.out).files[0].file;
+    assert.ok(!leaks(OV_B, label, 4) && !leaks(OV_A, label, 4), 'a piece of a string id reached the file label');
+    assert.equal(label, '1:x-[ID]-y.md');
+  });
+  it('S44 a UTF-8 byte order mark does not move any column of line 1', () => {
+    const root = listRoot();
+    const plain = scan(root, `PR ${HOLD4}`);
+    const bom = scan(root, `﻿PR ${HOLD4}`);
+    assert.equal(plain.hits[0].col, 4);
+    assert.equal(bom.hits[0].col, 4);
+    assert.equal(bom.gate, 1);
+    const second = scan(root, `﻿ok\nPR ${HOLD4}`);
+    assert.equal(second.hits[0].line, 2);
+    assert.equal(second.hits[0].col, 4);
+  });
+});
