@@ -19,7 +19,7 @@
 //   SG13  a control character in a file name            -> a path or rule name is printed raw in the TIMEOUT, slowest-file or NOTE line
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
