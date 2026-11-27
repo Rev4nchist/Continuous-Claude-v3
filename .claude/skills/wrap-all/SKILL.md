@@ -16,7 +16,7 @@ Only the seat sends. Any other session that runs `/wrap-all` gets the dry run an
 node C:/Users/dkhay/continuous-claude/scripts/coordination/wrap-all-table.mjs
 ```
 
-It reads the live sessions, their lane notes, the run lock, the FleetOps publish lock and the worktrees. It prints one row per session: running work, uncommitted files, commits behind `fork/main`, and a stop point. It prints the `fork/main` sha its behind counts use and the time of the last fetch. It runs no fetch, no `say`, no SendMessage and no delete.
+It reads the live sessions, the run lock files and `runs.jsonl` (running work comes from them, never from lane note prose: a note only warns), the FleetOps publish lock and the worktrees. It prints one row per session: running work, uncommitted files, commits behind `fork/main`, and a stop point. It prints the `fork/main` sha its behind counts use and the time of the last fetch. It runs no fetch, no `say`, no SendMessage and no delete.
 
 Stop points in the table:
 
@@ -27,6 +27,10 @@ Stop points in the table:
 | SAVE PATCH | Uncommitted tracked files. Save them as a patch in the lane e2e folder. |
 | MERGE MAIN BY V7.10 | Behind `fork/main`. Merge by V7.10 and push. |
 | RELEASE LOCK FIRST | The session holds the FleetOps publish lock. It finishes the step or runs the failed release with its step number. |
+| PUSH FIRST | Commits that are not on the fork branch. Push the branch to the fork, then write the handoff. |
+| UNKNOWN (READ FAILED) | A read failed, a run lock file or an unreadable lock blocks the row, a lane has no matched worktree, or a hook build is open by the lane note only (a build takes no lock). The seat reads it by hand before any handoff word. |
+
+Any held run lock blocks every READY row until the seat reads it. The seat row reads the primary checkout too: it holds files of no session (today `ROADMAP.md`), and the seat reads them before a wrap.
 
 A session that is not the seat stops here.
 
