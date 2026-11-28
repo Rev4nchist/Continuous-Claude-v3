@@ -1584,17 +1584,28 @@ test('FU2 a tracked name with a segment of dots and spaces voids with climb-name
 
 test('FU3 a link name with a backslash voids; a target walked on slash only is checked too', () => {
   // Breaks when: a link named a\b is looked up as a/b, or the walk reads only the Windows form of a target.
-  assert.equal(symlinkRules({ 'a\b': 'f.txt' }).length, 1);
+  assert.equal(symlinkRules({ 'a\\b': 'f.txt' }).length, 1);
   // Windows reads a\b as two segments (stays inside), a slash-only lookup reads one name (three parent steps leave the tree).
-  assert.equal(symlinkRules({ 'd/l': 'a\b/../../..' }).length, 1);
-  assert.deepEqual(symlinkRules({ 'd/l': 'a\b' }), [], 'a backslash target alone is not void');
+  assert.equal(symlinkRules({ 'd/l': 'a\\b/../../..' }).length, 1);
+  assert.deepEqual(symlinkRules({ 'd/l': 'a\\b' }), [], 'a backslash target alone is not void');
 });
 
-test('FU3b a real repo: a mixed-case link chain and a backslash link name, made with update-index (no checkout)', () => {
+/** A real repo whose head holds links with names that git refuses in the index on Windows (a backslash). A flat tree from git mktree and commit-tree: no index, no checkout. */
+function repoWithRawLinks(links) {
+  const dir = tmpDir();
+  const run = (input, ...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, ...(input === null ? {} : { input }) }).trim();
+  run(null, 'init', '-q', '-b', 'main');
+  const rows = Object.entries(links).map(([name, target]) => `120000 blob ${run(target, 'hash-object', '-w', '--stdin')}\t${name}\n`).join('');
+  const tree = run(rows, 'mktree');
+  const head = run(null, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit-tree', tree, '-m', 'c1');
+  return { dir, head };
+}
+
+test('FU3b a real repo: a mixed-case link chain (update-index) and a backslash link name (mktree), no checkout', () => {
   // Breaks when: the real ls-tree and cat-file path differs from the scripted one.
   const bad = repoWithLinks({ Alias: '.', leak: 'alias/../outside' });
   assert.equal(checkHeadSymlinks({ git: gitIn(bad.dir), head: bad.head }).filter((x) => x.rule === 'symlink').length, 1);
-  const back = repoWithLinks({ 'a\b': 'f.txt' });
+  const back = repoWithRawLinks({ 'a\\b': 'f.txt' });
   assert.equal(checkHeadSymlinks({ git: gitIn(back.dir), head: back.head }).filter((x) => x.rule === 'symlink').length, 1);
 });
 

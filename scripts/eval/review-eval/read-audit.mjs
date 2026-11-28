@@ -4,7 +4,7 @@
 // Void rules: no-stream, unparsable, no-init, tree-form, unknown-kind (a kind that is not read, grep or glob, a tool_call key that is neither *ToolCall nor metadata, or an event type
 // outside the allow list), hook-context, outside-path (+ answer-key; a drive letter with a colon and no separator counts; a `..` segment or a root inside a brace of a glob pattern or a grep
 // glob argument counts, and so does a `..` segment in a string that holds a brace; a device path `\?\` or `\.\` that names no drive and no UNC share, such as GLOBALROOT or Volume{GUID}, is a root; a segment of only dots and spaces
-// other than one dot is a parent reference when it is two dots and trailing spaces, else unresolvable, and both count), prefix-path, symlink, symlink-check-failed, no-tool-call, no-result (no result event), record-failed and audit-error (replay only:
+// other than one dot is a parent reference when it is two dots and trailing spaces, else unresolvable, and both count), prefix-path, symlink, climb-name (a tracked name with a segment of only dots and spaces), symlink-check-failed, no-tool-call, no-result (no result event), record-failed and audit-error (replay only:
 // the state line could not be written, or the audit threw; the row is void with a fixed reason).
 // Two things are not read: grep pattern text (args.pattern and its echo result.success.pattern) and file text (a string named content or contentBlobId).
 // An OBJECT named content is walked: a grep result keeps its match files in workspaceResults.{key}.content.matches[].file. A relative match file resolves against the tree.
@@ -16,7 +16,8 @@
 // The verdict line and the scan count the exempt entries, tree level and folder level apart, each split into tracked and harness. They also count stream gaps (a reconnecting event or a resume
 // retry; a count, never a void). A verdict line never holds a path, key, entry or event type from a tool call. It does hold stream text that is not a path: the init model, the raw call id
 // and the name of an unknown tool-call key (the tool kind). Rule entries hold a rule name, a tool kind, a field name and a call id.
-// AUDIT_VERSION is 1: no verdict line has been written outside a test. Raise it on any rule or line-format change after the first one is written.
+// AUDIT_VERSION is 2. Version 2 adds the head rule climb-name, link names looked up without letter case, a backslash in a link name as a void, a second link walk on slash only,
+// and the line fields runOk and resultEvents. A version 1 line holds neither field. Raise it on any rule or line-format change.
 // CLI: read-audit.mjs <stream> [--run-id --kind --head --repo <dir> --state <file> --no-record] | --scan [--root <dir> --prefix <p> --repo <dir>] | --summary (--runs <file> | --heads <dir>...) [--state <file>]
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -26,7 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
-export const AUDIT_VERSION = 1;
+export const AUDIT_VERSION = 2;
 /** The audit's own list. It is not TREE_EXCLUDES: the frozen copy holds that list, and this one must grow. A segment matches whole. */
 export const ANSWER_KEY_SEGMENTS = ['review-eval/gold', 'review-eval/seeds', 'review-eval/rubrics', 'linktype-labels.json', '.claudedocs', 'local-review-shadow', 'cli-pairs', 'holdout.json', '.git'];
 const KINDS = ['read', 'grep', 'glob'];
@@ -318,7 +319,7 @@ export function auditStream(text, { tmpdir = os.tmpdir(), symlinks = [], tracked
   if (bad > 0) add('unparsable', null, 'stream');
   const init = auditInits(events, tmpdir, st);
   const { types, gaps } = auditEvents(events, st);
-  // A stream cut at a line end. Only for a run that reports success (runOk): a run that already failed or timed out keeps its own status, and the other rules still read its stream.
+  // A stream cut at a line end. Only for a run that reports success (runOk): an engine run with status incomplete keeps its own status, and the other rules still read its stream.
   if (types.result === 0 && runOk !== false) add('no-result', null, 'stream');
   events.forEach((ev, i) => { if (ev.type === 'tool_call' || ev.tool_call) auditCall(ev, i, st); });
   const kinds = [...st.seen.values()];
@@ -341,6 +342,7 @@ export function auditFile(file, opts = {}) {
 // ---- symlinks in the head commit ----
 const FAILED = { rule: 'symlink-check-failed', tool: null, field: 'git', callId: null, answerKey: false };
 const SYMLINK = { rule: 'symlink', tool: null, field: 'tree-entry', callId: null, answerKey: false };
+const CLIMB_NAME = { rule: 'climb-name', tool: null, field: 'tree-entry', callId: null, answerKey: false };
 
 /** The most links one walk may follow. A longer chain, or a loop, voids. */
 const MAX_LINK_STEPS = 40;
@@ -366,22 +368,32 @@ function escapesByText(name, target) {
  * Does a link leave the tree? Two checks, and either one voids: the text check (escapesByText, the Windows reading) and the link walk (the Unix reading).
  * The walk goes one segment at a time from the folder of the link, as a real lookup does.
  * When a path prefix is itself a link of the head (links: Map name -> target), its target replaces it, resolved from that link's folder, before the next segment.
- * Voids on: an absolute target at any step, a `..` above the root, more than MAX_LINK_STEPS links followed.
+ * The walk runs twice: once with a backslash as a separator (Windows) and once on slash only (POSIX); either one that leaves the tree voids. Link names are looked up in lower case.
+ * Voids on: an absolute target at any step, a `..` above the root, a segment of dots and spaces that is not exactly two dots (unresolvable), more than MAX_LINK_STEPS links followed.
  */
 function escapesTree(name, target, links) {
+  if (isAbsoluteTarget(target.replace(/\\/g, '/')) || escapesByText(name, target)) return true;
+  return walkLinks(name, target, links, true) || walkLinks(name, target, links, false);
+}
+
+/**
+ * One link walk. windows: a backslash splits a segment (the Windows reading). Not windows: only a slash splits, so `a\b` is one name (the POSIX reading).
+ * The lookup key is lower-case: a case-blind file system (WSL on NTFS, macOS) follows `alias` to a link named `Alias`.
+ */
+function walkLinks(name, target, links, windows) {
+  const form = (t) => (windows ? t.replace(/\\/g, '/') : t);
   const here = name.split('/').slice(0, -1);
-  const rest = target.replace(/\\/g, '/').split('/');
-  if (isAbsoluteTarget(rest.join('/')) || escapesByText(name, target)) return true;
+  const rest = form(target).split('/');
   let steps = 0;
   while (rest.length > 0) {
     const seg = rest.shift();
     if (seg === '' || seg === '.') continue;
     if (CLIMB_SEG.test(seg)) { if (!PARENT_SEG.test(seg) || here.length === 0) return true; here.pop(); continue; }
     here.push(seg);
-    const via = links.get(here.join('/'));
+    const via = links.get(here.join('/').toLowerCase());
     if (via === undefined) continue;
     steps += 1;
-    const next = via.replace(/\\/g, '/');
+    const next = form(via);
     if (steps > MAX_LINK_STEPS || isAbsoluteTarget(next)) return true;
     here.pop();
     rest.unshift(...next.split('/'));
@@ -400,17 +412,20 @@ export function readHeadCommit({ git, head }) {
   if (ls.status !== 0) return { ran: true, tracked: null, rules: [FAILED] };
   const rules = [];
   const tracked = new Set();
-  const links = new Map(); // name -> target of every mode 120000 entry the head holds
+  const links = new Map(); // lower-case name -> target of every mode 120000 entry the head holds (the lookup key of a case-blind file system)
+  const linkList = []; // [name, target] of each link, so two names that differ only in letter case are both checked
   for (const entry of String(ls.stdout ?? '').split('\0')) {
     const m = /^(\d+) \w+ ([0-9a-f]+)\t([\s\S]+)$/.exec(entry);
     if (!m) continue;
     tracked.add(m[3].toLowerCase());
+    if (m[3].split('/').some((seg) => CLIMB_SEG.test(seg))) rules.push(CLIMB_NAME); // git cannot hold a segment of exactly two dots, so every such segment is a hit
     if (m[1] !== '120000') continue;
+    if (m[3].includes('\\')) rules.push(SYMLINK); // a POSIX lookup reads a\b as one name, a Windows lookup as two
     const blob = git(['cat-file', 'blob', m[2]]);
     if (blob.status !== 0) rules.push(FAILED);
-    else links.set(m[3], String(blob.stdout ?? ''));
+    else { links.set(m[3].toLowerCase(), String(blob.stdout ?? '')); linkList.push([m[3], String(blob.stdout ?? '')]); }
   }
-  for (const [name, target] of links) if (escapesTree(name, target, links)) rules.push(SYMLINK);
+  for (const [name, target] of linkList) if (escapesTree(name, target, links)) rules.push(SYMLINK);
   return { ran: true, tracked, rules };
 }
 
@@ -465,11 +480,11 @@ function agentVersionBeside(streamPath) {
   try { return JSON.parse(readFileSync(`${String(streamPath).slice(0, -STREAM_GZ.length)}.json`, 'utf8')).cursorAgentVersion ?? null; } catch { return null; }
 }
 
-function buildLine({ kind, runId, streamPath, result, head, pr, round, symlinkCheck, ts }) {
+function buildLine({ kind, runId, streamPath, result, head, pr, round, symlinkCheck, ts, runOk = true }) {
   return {
     schema: 1, ts, runId: runId ?? null, kind, streamPath: streamPath ?? null, streamSha256: result.streamSha256 ?? null, verdict: result.verdict, rules: result.rules,
     counts: result.counts, exempt: { 'glob-parent-name': result.exempt }, gaps: result.gaps, symlinkCheck, auditVersion: AUDIT_VERSION, head: head ?? null, pr: pr ?? null, round: round ?? null,
-    model: result.model, agentVersion: agentVersionBeside(streamPath),
+    model: result.model, agentVersion: agentVersionBeside(streamPath), runOk: runOk !== false, resultEvents: result.eventTypes?.result ?? 0,
   };
 }
 
@@ -495,7 +510,7 @@ const ERROR_PATCH = { status: 'failed', void: true, reason: 'read-audit: audit-e
 function auditErrorResult(o) {
   let line = null;
   try {
-    line = buildLine({ ...voidOpts(o), result: voidResult('audit-error'), symlinkCheck: 'not-run', ts: new Date().toISOString() });
+    line = buildLine({ ...voidOpts(o), result: voidResult('audit-error'), symlinkCheck: 'not-run', ts: new Date().toISOString(), runOk: o?.runOk !== false });
     appendLine(o?.statePath ?? defaultStatePath(o?.env ?? process.env), line);
   } catch { /* the patch below still voids the row */ }
   return { patch: { ...ERROR_PATCH }, line, auditError: true };
@@ -507,7 +522,7 @@ function auditReplayRun(o) {
   const head = readHeadCommit({ git: o.git, head: o.head });
   const result = auditFile(o.streamPath, { tmpdir: o.tmpdir, symlinks: head.rules, tracked: head.tracked, runOk: o.runOk !== false });
   const symlinkCheck = !head.ran ? 'not-run' : head.rules.length > 0 ? 'void' : 'pass';
-  const line = buildLine({ ...o, result, symlinkCheck, ts: new Date((o.now ?? Date.now)()).toISOString() });
+  const line = buildLine({ ...o, result, symlinkCheck, ts: new Date((o.now ?? Date.now)()).toISOString(), runOk: o.runOk !== false });
   let recordError = false;
   try { appendLine(o.statePath ?? defaultStatePath(o.env ?? process.env), line); } catch { recordError = true; }
   const patch = recordError ? voidPatch({ verdict: 'void', rules: [...line.rules, { rule: 'record-failed' }] }) : voidPatch(line);
