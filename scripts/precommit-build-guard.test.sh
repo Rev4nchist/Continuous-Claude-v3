@@ -312,6 +312,118 @@ d="$(import_repo $'import { x } from \x27./lib/a\x27;\nexport const s = `import(
 stage_edit "$d" $F $'import { x } from \x27./lib/a.js\x27;\nexport const s = `import("./lib/a")`;\nexport const a = x;'
 assert_exit "real import gains .js, template text unchanged (no dist) -> BLOCK" 1 "$(run_guard "$d")"
 
+# --- New hook module that no bundle imports (card hooks-build-guard-new-module).
+# The build of a new unimported module changes only dist/.build-inputs.json: one line "<path under src/>": "<sha256 of the file
+# with CR removed>". The guard ALLOWS that, and only that: every staged src file is new (status A), each has its hash line in the
+# STAGED .build-inputs.json, no other src file changes, and no dist/*.mjs differs from HEAD (a bundle that imports the new file
+# changes, so a changed bundle means the module is imported). Everything else stays BLOCK. Built in scratch repos only.
+BI=.claude/hooks/dist/.build-inputs.json
+sha_of() { tr -d '\r' < "$1" | sha256sum | cut -d' ' -f1; }   # the same hash write-build-inputs.mjs records
+bi_json() {  # $@ = "path:hash" pairs -> a manifest in the shape the build writes
+  local out='{"version": 1, "algorithm": "sha256", "inputs": {' sep='' p
+  for p in "$@"; do out="$out$sep"$'\n    "'"${p%%:*}"'": "'"${p#*:}"'"'; sep=','; done
+  printf '%s\n}\n}\n' "$out"
+}
+nm_repo() {  # a committed hook build: old.ts, dist/old.mjs and a manifest that lists old.ts -> echoes repo dir
+  local r; r="$(new_repo)"
+  git -C "$r" config core.autocrlf false
+  printf '%s\n' 'export const a = 1;' > "$r/.claude/hooks/src/old.ts"
+  printf '%s\n' 'const a = 1;' > "$r/.claude/hooks/dist/old.mjs"
+  bi_json "old.ts:$(sha_of "$r/.claude/hooks/src/old.ts")" > "$r/$BI"
+  git -C "$r" add .claude/hooks && git -C "$r" commit -q -m base
+  echo "$r"
+}
+NEW=.claude/hooks/src/newmod.ts
+
+# --- Case 46: new unimported module, fresh manifest line staged -> ALLOW
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" "old.ts:$(sha_of "$d/.claude/hooks/src/old.ts")" > "$d/$BI"
+git -C "$d" add "$NEW" "$BI"
+assert_exit "new unimported module + fresh manifest hash -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 47: changed imported module, stale dist (no manifest, no bundle) -> BLOCK
+d="$(nm_repo)"
+stage_edit "$d" .claude/hooks/src/old.ts 'export const a = 2;'
+assert_exit "modified module, stale dist -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 48: new module, no build run (manifest not staged) -> BLOCK
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"; git -C "$d" add "$NEW"
+assert_exit "new module, no build (manifest unchanged) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 49: new module, staged manifest holds a wrong hash -> BLOCK
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"
+bi_json "newmod.ts:$(printf 'x' | sha256sum | cut -d' ' -f1)" > "$d/$BI"
+git -C "$d" add "$NEW" "$BI"
+assert_exit "new module, wrong hash in manifest -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 50: the hash is in the working tree manifest, not the staged one -> BLOCK
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"; git -C "$d" add "$NEW"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" > "$d/$BI"
+assert_exit "fresh hash only in the working tree manifest -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 51: new module whose build changed a bundle .mjs that is NOT staged (it is imported) -> BLOCK
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" > "$d/$BI"
+git -C "$d" add "$NEW" "$BI"
+printf '%s\n' 'const a = 1; const n = 1;' > "$d/.claude/hooks/dist/old.mjs"
+assert_exit "new module, bundle .mjs changed in the working tree, not staged -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 52: the same bundle change staged -> ALLOW (the existing rule: a staged dist .mjs)
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" > "$d/$BI"
+printf '%s\n' 'const a = 1; const n = 1;' > "$d/.claude/hooks/dist/old.mjs"
+git -C "$d" add "$NEW" "$BI" .claude/hooks/dist/old.mjs
+assert_exit "new module, bundle .mjs staged with it -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 53: a new module and a modified module together -> BLOCK
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" > "$d/$BI"
+git -C "$d" add "$NEW" "$BI"
+stage_edit "$d" .claude/hooks/src/old.ts 'export const a = 3;'
+assert_exit "new module + modified module, no bundle -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 54: two new modules, only one has its manifest line -> BLOCK
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"
+printf '%s\n' 'export const m = 1;' > "$d/.claude/hooks/src/second.ts"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" > "$d/$BI"
+git -C "$d" add "$NEW" .claude/hooks/src/second.ts "$BI"
+assert_exit "two new modules, one manifest line -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 55: two new modules, both manifest lines -> ALLOW
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"
+printf '%s\n' 'export const m = 1;' > "$d/.claude/hooks/src/second.ts"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" "second.ts:$(sha_of "$d/.claude/hooks/src/second.ts")" > "$d/$BI"
+git -C "$d" add "$NEW" .claude/hooks/src/second.ts "$BI"
+assert_exit "two new modules, both manifest lines -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 56: a new module in a nested folder is keyed relative to src/ -> ALLOW
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/.claude/hooks/src/shared/deep.ts"
+bi_json "shared/deep.ts:$(sha_of "$d/.claude/hooks/src/shared/deep.ts")" > "$d/$BI"
+git -C "$d" add .claude/hooks/src/shared/deep.ts "$BI"
+assert_exit "new nested module, manifest key relative to src -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 57: a new module with CRLF line ends: the manifest records the CR-stripped hash -> ALLOW
+d="$(nm_repo)"
+printf 'export const n = 1;\r\nexport const k = 2;\r\n' > "$d/$NEW"
+bi_json "newmod.ts:$(sha_of "$d/$NEW")" > "$d/$BI"
+git -C "$d" add "$NEW" "$BI"
+assert_exit "new CRLF module, CR-stripped hash -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 58: SKIP_BUILD_GUARD still escapes (kept; the fix is not an escape hatch) -> ALLOW
+d="$(nm_repo)"
+printf '%s\n' 'export const n = 1;' > "$d/$NEW"; git -C "$d" add "$NEW"
+assert_exit "SKIP_BUILD_GUARD=1 on a new module with no build -> allow" 0 "$(run_guard "$d" SKIP_BUILD_GUARD=1)"
+
 echo ""
 echo "precommit-build-guard tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
