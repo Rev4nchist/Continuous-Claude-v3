@@ -1173,10 +1173,22 @@ function lockedVersion(file, name) {
   try { return readJson(file).packages?.[`node_modules/${name}`]?.version ?? null; } catch { return null; }
 }
 
+const MISSING_SHOWN = 8;
+/** The names that a package.json declares in dependencies and devDependencies, sorted; [] when the file is missing or unreadable. */
+function declaredPackages(file) {
+  try {
+    const j = readJson(file);
+    return [...new Set([...Object.keys(j.dependencies ?? {}), ...Object.keys(j.devDependencies ?? {})])].sort();
+  } catch { return []; }
+}
+
 /**
  * The primary checkout's .claude/hooks install is whole: node_modules/.package-lock.json exists (npm writes it last, so a lone
  * node_modules/.vite does not count) and `pg` resolves from it. A gap is a FAIL: every worktree borrows this install through the
- * shared resolver (scripts/lib/resolve-deps.mjs). Installed typescript that differs from package-lock.json is a WARN with the pair:
+ * shared resolver (scripts/lib/resolve-deps.mjs). Every package that .claude/hooks/package.json declares (dependencies and
+ * devDependencies) must have node_modules/<name>/package.json: a missing one is a FAIL that names it (card coord-guard-parser-followups,
+ * item 4: sh-syntax was missing after PR 718). That check runs BEFORE the typescript pair, so a version drift cannot hide it as a WARN.
+ * Existence only, no semver range. Installed typescript that differs from package-lock.json is a WARN with the pair:
  * the gates then run an older compiler than the lock names. Read only: no network, no install.
  */
 export function depsHooksInstall(o) {
@@ -1186,10 +1198,16 @@ export function depsHooksInstall(o) {
   const installed = join(hooks, 'node_modules', '.package-lock.json');
   if (!existsSync(installed)) return result('FAIL', 'deps', 'hooks-install', `${join(hooks, 'node_modules')} has no .package-lock.json: no complete install in the primary checkout; ${fix}`);
   if (!resolveDep('pg', { repoRoot: primary, anchors: [hooks] })) return result('FAIL', 'deps', 'hooks-install', `pg does not resolve from ${hooks}: the install is partial; ${fix}`);
+  const declared = declaredPackages(join(hooks, 'package.json'));
+  const missing = declared.filter((name) => !existsSync(join(hooks, 'node_modules', name, 'package.json')));
+  if (missing.length) {
+    const shown = missing.slice(0, MISSING_SHOWN).join(', ') + (missing.length > MISSING_SHOWN ? `, +${missing.length - MISSING_SHOWN} more` : '');
+    return result('FAIL', 'deps', 'hooks-install', `${missing.length} of ${declared.length} packages that ${join(hooks, 'package.json')} declares are not installed: ${shown}; ${fix}`);
+  }
   const have = lockedVersion(installed, 'typescript');
   const want = lockedVersion(join(hooks, 'package-lock.json'), 'typescript');
   if (have && want && have !== want) return result('WARN', 'deps', 'hooks-install', `installed typescript ${have}, lock says ${want}: ${fix}`);
-  return result('PASS', 'deps', 'hooks-install', `${hooks}: complete install, pg resolves${have ? `, typescript ${have}` : ''}`);
+  return result('PASS', 'deps', 'hooks-install', `${hooks}: complete install, pg resolves${declared.length ? `, ${declared.length} declared packages present` : ''}${have ? `, typescript ${have}` : ''}`);
 }
 
 /**
