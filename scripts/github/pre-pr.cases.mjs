@@ -786,11 +786,11 @@ test('E9: prCommitList reads the commits of base..HEAD oldest first, and gives [
 });
 
 test('E6: changedFiles lists the diff against the base and fails on an empty or broken diff', async () => {
-  const ok = changedFiles(fakeGit({ 'diff --name-only main...HEAD': 'a.md\nb/c.mjs\n' }), 'main');
+  const ok = changedFiles(fakeGit({ 'diff --name-only --no-renames main...HEAD': 'a.md\nb/c.mjs\n' }), 'main');
   assert.deepEqual(ok.paths, ['a.md', 'b/c.mjs']);
   assert.equal(ok.result.status, 'PASS');
-  assert.equal(changedFiles(fakeGit({ 'diff --name-only main...HEAD': '' }), 'main').result.status, 'FAIL');
-  assert.equal(changedFiles(fakeGit({ 'diff --name-only main...HEAD': { status: 128, stdout: '', stderr: 'bad' } }), 'main').result.status, 'FAIL');
+  assert.equal(changedFiles(fakeGit({ 'diff --name-only --no-renames main...HEAD': '' }), 'main').result.status, 'FAIL');
+  assert.equal(changedFiles(fakeGit({ 'diff --name-only --no-renames main...HEAD': { status: 128, stdout: '', stderr: 'bad' } }), 'main').result.status, 'FAIL');
 });
 
 // ---------- CodeRabbit step ----------
@@ -3758,12 +3758,12 @@ test('A12: a normal stamp has cr_answer_key false and answer_key_paths 0 (only a
   assert.deepEqual(keyFields(stampOf(repo)), { skipped: false, reason: null, key: false, n: 0, docs: false });
 });
 
-test('A8: a RENAME out of gold/ is caught on the OLD path: --name-only shows only the new one, bothSidePaths shows both', async () => {
+test('A8: a RENAME out of gold/ is caught on the OLD path: changedFiles and bothSidePaths both show the old and the new path', async () => {
   const repo = repoWithGoldFile();
   mkdirSync(path.join(repo.dir, 'docs'), { recursive: true });
   git(repo.dir, 'mv', repo.rel, 'docs/moved.md');
   git(repo.dir, 'commit', '-q', '-m', 'move gold out');
-  assert.deepEqual(changedFiles(makeGit(repo.dir), 'main').paths, ['docs/moved.md'], 'the rename shows only the new path today');
+  assert.deepEqual(changedFiles(makeGit(repo.dir), 'main').paths, ['docs/moved.md', repo.rel], 'a rename lists the new path and the old path (card changed-files-renames)');
   assert.deepEqual(PRE.bothSidePaths(makeGit(repo.dir), 'main...HEAD'), ['docs/moved.md', repo.rel]);
   const run = await prePr(repo);
   assert.equal(crStep(run).status, 'SKIP');
@@ -4020,7 +4020,7 @@ test('PIN3: the guard paths are the paths of git diff --name-only <baseCommit>..
   const pinned = git(repo.dir, 'merge-base', 'HEAD', 'refs/remotes/fork/main');
   const order = [];
   const real = makeGit(repo.dir);
-  const git2 = (args) => { if (args.includes('--no-renames')) order.push(`guard ${args.at(-1)}`); return real(args); };
+  const git2 = (args) => { if (args.includes('--no-renames') && args.includes('-z')) order.push(`guard ${args.at(-1)}`); return real(args); }; // -z marks the both-sides call
   const crRunner = (o) => { order.push(`cr ${o.args[0]}`); if (o.args[0] === 'usage') moveBase(repo); return { status: 0, stdout: o.args[0] === 'usage' ? USAGE_OK : NDJSON_OK, stderr: '' }; };
   const run = await prePr(repo, { crRunner, git: git2 });
   const expected = git(repo.dir, 'diff', '--name-only', '--no-renames', `${pinned}...HEAD`).split('\n').filter(Boolean);
@@ -4083,7 +4083,7 @@ test('PIN2: assertSafeCrArgs lets --base-commit pass only with a 40 character co
 test('A10: runPrePr reads a failed both-sides diff as unknown, not as no paths: FAIL, no CLI call', async () => {
   const repo = makeRepo();
   const real = makeGit(repo.dir);
-  const git = (args) => (args.includes('--no-renames') ? { status: 128, stdout: '', stderr: 'fatal: boom' } : real(args));
+  const git = (args) => (args.includes('--no-renames') && args.includes('-z') ? { status: 128, stdout: '', stderr: 'fatal: boom' } : real(args)); // -z marks the both-sides call: changedFiles also uses --no-renames now
   const run = await prePr(repo, { git });
   assert.equal(crStep(run).status, 'FAIL');
   assert.match(crStep(run).detail, /could not check the diff/);
@@ -5138,4 +5138,56 @@ test('AO5: a top-level app file with any code extension (ts, tsx, js, cjs, mjs, 
     assert.deepEqual(appGatesFor([`${APP_DIR}/top-level-file.${ext}`]).map((g) => g.id).sort(), APP_GATE_IDS, ext);
   }
   for (const ext of ['md', 'css']) assert.deepEqual(appGatesFor([`${APP_DIR}/top-level-file.${ext}`]), [], ext);
+});
+
+// ---------- card changed-files-renames: a rename lists both paths, so a file moved out of a surface still runs that surface's checks ----------
+// How it can fail, and the row that catches it:
+//   changedFiles lists only the new path of a rename (default rename detection)           -> CF1, CF2 (drop --no-renames in changedFiles)
+//   the opc pytest gate is handed a path that was deleted or moved away                    -> CF3, CF4 (drop the exists filter of resolveGate)
+//   a call without the exists argument changes: every older caller keeps its argument list -> CF3
+const MOVE_BODY = 'a long enough file body so that git sees the rename\nline two\nline three\nline four\n';
+
+/** A repo whose main holds `rel`; the branch feat/y makes its own RED commit, then moves `rel` to `dest`. */
+function repoWithMove(rel, dest) {
+  const repo = makeRepo({ files: { [rel]: MOVE_BODY } });
+  git(repo.dir, 'checkout', '-q', 'main');
+  git(repo.dir, 'merge', '-q', '--ff-only', 'feat/x');
+  git(repo.dir, 'checkout', '-q', '-b', 'feat/y');
+  git(repo.dir, 'commit', '-q', '--allow-empty', '-m', 'red');
+  const red = git(repo.dir, 'rev-parse', 'HEAD');
+  mkdirSync(path.join(repo.dir, path.dirname(dest)), { recursive: true });
+  git(repo.dir, 'mv', rel, dest);
+  git(repo.dir, 'commit', '-q', '-m', 'move');
+  return { dir: repo.dir, head: git(repo.dir, 'rev-parse', 'HEAD'), red };
+}
+
+test('CF1: changedFiles lists the old and the new path of a moved file', async () => {
+  const repo = repoWithMove(`${APP_DIR}/src/x.ts`, 'scripts/x.ts');
+  assert.deepEqual(changedFiles(makeGit(repo.dir), 'main').paths, [`${APP_DIR}/src/x.ts`, 'scripts/x.ts']);
+});
+
+test('CF2: a file moved OUT of apps/agentic-os still runs the app lint and typecheck gates', async () => {
+  const repo = repoWithMove(`${APP_DIR}/src/x.ts`, 'scripts/x.ts');
+  const { gateRuns } = await prePr(repo, { skipCr: true, bodyText: featureBody(repo.head, repo.red) });
+  assert.ok(gateRuns.includes('agentic-os-lint'), gateRuns.join(','));
+  assert.ok(gateRuns.includes('agentic-os-typecheck'), gateRuns.join(','));
+});
+
+test('CF3: the opc pytest gate gets only a path that exists; scope still counts a missing one; no exists argument changes nothing', async () => {
+  const gone = ['opc/tests/test_gone.py'];
+  assert.equal(gatesFor(gone, [], () => false).some((g) => g.id === 'opc-pytest'), false, 'a deleted test file is not a pytest argument');
+  const kept = gatesFor(gone, [], () => true).find((g) => g.id === 'opc-pytest');
+  assert.deepEqual(kept.args, ['run', 'pytest', 'tests/test_gone.py']);
+  assert.deepEqual(gatesFor(gone).find((g) => g.id === 'opc-pytest').args, ['run', 'pytest', 'tests/test_gone.py'], 'an older call keeps its argument list');
+  const mixed = gatesFor(['opc/tests/test_gone.py', 'opc/tests/test_here.py'], [], (p) => p.endsWith('test_here.py')).find((g) => g.id === 'opc-pytest');
+  assert.deepEqual(mixed.args, ['run', 'pytest', 'tests/test_here.py']);
+});
+
+test('CF4: a test file moved OUT of opc never reaches pytest, and the dropped gate leaves its NOTE', async () => {
+  const repo = repoWithMove('opc/tests/test_a.py', 'scripts/a_check.py');
+  const specs = [];
+  const exec = (spec) => { specs.push(spec); return { status: 0, stdout: 'ran\n', stderr: '' }; };
+  const { result } = await prePr(repo, { skipCr: true, exec, bodyText: featureBody(repo.head, repo.red) });
+  assert.equal(specs.some((s) => s.id === 'opc-pytest'), false, 'no pytest run on a deleted file');
+  assert.ok(result.lines.some((l) => /opc changed with no test file touched/.test(l)), result.lines.join('\n'));
 });
