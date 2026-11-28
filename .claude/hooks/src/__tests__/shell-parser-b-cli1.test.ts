@@ -13,7 +13,7 @@ import { judge, defaultEntry } from '../shared/shell-judge.js';
 vi.setConfig({ testTimeout: 15000 });
 const P = 'pu' + 'sh';
 // Card coord-test-log-leak: `env: {}` has no VITEST and no log path, so a late parse (row C1b) wrote to the real
-// ~/.claude/guard-decisions.jsonl. The deps env now names a temp log file: the row lands there with source "probe".
+// ~/.claude/logs/guard-decisions.jsonl. The deps env now names a temp log file: the row lands there with source "probe".
 const logDir = mkdtempSync(join(tmpdir(), 'shell-parser-b-cli1-'));
 const logFile = join(logDir, 'guard.jsonl');
 afterAll(() => rmSync(logDir, { recursive: true, force: true }));
