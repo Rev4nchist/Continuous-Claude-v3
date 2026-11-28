@@ -1609,6 +1609,20 @@ test('FU3b a real repo: a mixed-case link chain (update-index) and a backslash l
   assert.equal(checkHeadSymlinks({ git: gitIn(back.dir), head: back.head }).filter((x) => x.rule === 'symlink').length, 1);
 });
 
+test('FU1b two links whose names differ only in letter case void the head (fail closed), also when no walk escapes', () => {
+  // Breaks when: the lower-case map lets the last of Alias and alias win, so leak -> Alias/../outside (an escape on a case-sensitive file system) reads as inside. CodeRabbit CLI finding, PR run 2.
+  assert.equal(symlinkRules({ Alias: '.', alias: 'sub', leak: 'Alias/../outside' }).length, 1);
+  assert.equal(symlinkRules({ 'd/Up': '..', 'd/up': 'x' }).length, 1, 'in a folder');
+  assert.deepEqual(symlinkRules({ Alias: 'sub', other: 'Alias/x' }), [], 'one link per lower-case name is no collision');
+});
+
+test('FU1c a name listed twice in the same case is not a collision', () => {
+  // Breaks when: the collision test compares lower-case names only and not the names themselves.
+  const entry = (i) => `120000 blob ${String(i).padStart(40, '0')}\tl\0`;
+  const git = (args) => (args[0] === 'ls-tree' ? { status: 0, stdout: entry(1) + entry(2), stderr: '' } : { status: 0, stdout: 'f.txt', stderr: '' });
+  assert.deepEqual(checkHeadSymlinks({ git, head: HEAD }), []);
+});
+
 test('FU4 AUDIT_VERSION is 2: items 1 to 3 add rules and item 5 adds fields', () => {
   // Breaks when: a rule or line-format change lands with the version at 1.
   assert.equal(AUDIT_VERSION, 2);
