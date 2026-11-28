@@ -1174,12 +1174,12 @@ function lockedVersion(file, name) {
 }
 
 const MISSING_SHOWN = 8;
-/** The names that a package.json declares in dependencies and devDependencies, sorted; [] when the file is missing or unreadable. */
+/** The names that a package.json declares in dependencies and devDependencies, sorted. `readable` is false when the file is missing or not JSON. */
 function declaredPackages(file) {
   try {
     const j = readJson(file);
-    return [...new Set([...Object.keys(j.dependencies ?? {}), ...Object.keys(j.devDependencies ?? {})])].sort();
-  } catch { return []; }
+    return { readable: true, names: [...new Set([...Object.keys(j.dependencies ?? {}), ...Object.keys(j.devDependencies ?? {})])].sort() };
+  } catch { return { readable: false, names: [] }; }
 }
 
 /**
@@ -1198,16 +1198,20 @@ export function depsHooksInstall(o) {
   const installed = join(hooks, 'node_modules', '.package-lock.json');
   if (!existsSync(installed)) return result('FAIL', 'deps', 'hooks-install', `${join(hooks, 'node_modules')} has no .package-lock.json: no complete install in the primary checkout; ${fix}`);
   if (!resolveDep('pg', { repoRoot: primary, anchors: [hooks] })) return result('FAIL', 'deps', 'hooks-install', `pg does not resolve from ${hooks}: the install is partial; ${fix}`);
-  const declared = declaredPackages(join(hooks, 'package.json'));
+  const manifest = join(hooks, 'package.json');
+  const { readable, names: declared } = declaredPackages(manifest);
   const missing = declared.filter((name) => !existsSync(join(hooks, 'node_modules', name, 'package.json')));
   if (missing.length) {
     const shown = missing.slice(0, MISSING_SHOWN).join(', ') + (missing.length > MISSING_SHOWN ? `, +${missing.length - MISSING_SHOWN} more` : '');
-    return result('FAIL', 'deps', 'hooks-install', `${missing.length} of ${declared.length} packages that ${join(hooks, 'package.json')} declares are not installed: ${shown}; ${fix}`);
+    return result('FAIL', 'deps', 'hooks-install', `${missing.length} of ${declared.length} packages that ${manifest} declares are not installed: ${shown}; ${fix}`);
   }
+  // A check that reads no declared package is vacuous: say so instead of a PASS (seat condition, 11-27).
+  if (!readable) return result('WARN', 'deps', 'hooks-install', `${manifest} cannot be read, so no declared packages are checked`);
+  if (!declared.length) return result('WARN', 'deps', 'hooks-install', `${manifest} declares no packages, so no declared packages are checked`);
   const have = lockedVersion(installed, 'typescript');
   const want = lockedVersion(join(hooks, 'package-lock.json'), 'typescript');
   if (have && want && have !== want) return result('WARN', 'deps', 'hooks-install', `installed typescript ${have}, lock says ${want}: ${fix}`);
-  return result('PASS', 'deps', 'hooks-install', `${hooks}: complete install, pg resolves${declared.length ? `, ${declared.length} declared packages present` : ''}${have ? `, typescript ${have}` : ''}`);
+  return result('PASS', 'deps', 'hooks-install', `${hooks}: complete install, pg resolves, ${declared.length} declared packages present${have ? `, typescript ${have}` : ''}`);
 }
 
 /**
