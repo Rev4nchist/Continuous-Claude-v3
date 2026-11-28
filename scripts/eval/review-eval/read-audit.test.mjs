@@ -1616,6 +1616,18 @@ test('FU1b two links whose names differ only in letter case void the head (fail 
   assert.deepEqual(symlinkRules({ Alias: 'sub', other: 'Alias/x' }), [], 'one link per lower-case name is no collision');
 });
 
+test('FU1d a link whose name equals a tracked folder or file name in lower case, written differently, voids the head', () => {
+  // Breaks when: the collision test compares link names with link names only. Here the lower-case lookup follows the link Alias (to x/y/z), so the real folder alias/ with its link l2 is never walked:
+  // on a case-sensitive file system d/leak -> ../alias/l2/.. goes root, alias, l2 (the root), then above the root. Main (exact-case lookup) voided this head; the first widening let it pass.
+  assert.equal(symlinkRules({ Alias: 'x/y/z', 'alias/l2': '..', 'd/leak': '../alias/l2/..' }).length, 1);
+  // A file named alias beside a link Alias, and a folder prefix of a deeper path.
+  const named = (list) => checkHeadSymlinks({ git: (a) => (a[0] === 'ls-tree' ? { status: 0, stdout: list.map(([mode, n], i) => `${mode} blob ${String(i + 1).padStart(40, '0')}\t${n}\0`).join(''), stderr: '' } : { status: 0, stdout: 'f.txt', stderr: '' }), head: HEAD }).filter((x) => x.rule === 'symlink');
+  assert.equal(named([['120000', 'Alias'], ['100644', 'alias']]).length, 1, 'a file alias');
+  assert.equal(named([['120000', 'Alias'], ['100644', 'alias/deep/f.txt']]).length, 1, 'a folder prefix');
+  assert.deepEqual(named([['120000', 'Alias'], ['100644', 'Aliased/f.txt'], ['100644', 'other']]), [], 'a longer name is not a collision');
+  assert.deepEqual(named([['120000', 'a/Alias'], ['100644', 'alias/f.txt']]), [], 'the same last name in another folder is not a collision');
+});
+
 test('FU1c a name listed twice in the same case is not a collision', () => {
   // Breaks when: the collision test compares lower-case names only and not the names themselves.
   const entry = (i) => `120000 blob ${String(i).padStart(40, '0')}\tl\0`;
