@@ -3,13 +3,21 @@
 //   b  withParsed has no time bound on the bash parse: a slow parse can pass the 10 s hook timeout (decision-gate.ts withParsed)
 //   c  shopt -u after an alias use hides the alias exposure: -u must never turn the expansion off (shell-judge.ts aliasCall)
 // The modules under test are imported, never copied.
-import { expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, expect, it, vi } from 'vitest';
 import { scriptRunnerDenies, withParsed, type Deps } from '../decision-gate.js';
 import { judge, defaultEntry } from '../shared/shell-judge.js';
 
 vi.setConfig({ testTimeout: 15000 });
 const P = 'pu' + 'sh';
-const base = { git: () => ({ status: 1, stdout: '' }), readFile: () => null, env: {}, home: '/h' } as unknown as Deps;
+// Card coord-test-log-leak: `env: {}` has no VITEST and no log path, so a late parse (row C1b) wrote to the real
+// ~/.claude/guard-decisions.jsonl. The deps env now names a temp log file: the row lands there with source "probe".
+const logDir = mkdtempSync(join(tmpdir(), 'shell-parser-b-cli1-'));
+const logFile = join(logDir, 'guard.jsonl');
+afterAll(() => rmSync(logDir, { recursive: true, force: true }));
+const base = { git: () => ({ status: 1, stdout: '' }), readFile: () => null, env: { CCV3_GUARD_DECISIONS_LOG: logFile }, home: '/h' } as unknown as Deps;
 const payload = (tool_name: string, command: string) => JSON.stringify({ tool_name, tool_input: { command }, cwd: '/repo' });
 const J = (t: string) => judge(t, 'bash', defaultEntry);
 
@@ -55,4 +63,9 @@ it('C1b: a bash parse that never resolves ends inside the budget with no parsed 
   expect(Date.now() - t0).toBeLessThan(3000);
   expect(d.parsed).toBeUndefined();
   expect(d.git).toBe(base.git);
+  // The late-parse row lands in the temp file named by the deps env, marked as a probe (the doctor ignores it). If the override is lost, this fails.
+  const rows = readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { hook: string; kind: string; message: string; source: string });
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ hook: 'decision-gate', kind: 'error', source: 'probe' });
+  expect(rows[0].message).toMatch(/parse was late: no answer in 100 ms/);
 });
