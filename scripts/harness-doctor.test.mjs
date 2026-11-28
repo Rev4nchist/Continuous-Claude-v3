@@ -256,6 +256,8 @@ function dropStoreLink(repo) {
 function seedHooksInstall(repo, { installedTs = '5.9.3', lockTs = '5.9.3', pg = true } = {}) {
   const hooks = join(repo, '.claude', 'hooks');
   put(join(hooks, 'package-lock.json'), JSON.stringify({ packages: { 'node_modules/typescript': { version: lockTs } } }));
+  // The row reads the declared packages; a package.json that declares nothing is a WARN (card coord-guard-parser-followups, item 4), so the seed declares pg.
+  put(join(hooks, 'package.json'), JSON.stringify({ name: 'hooks-fixture', dependencies: { pg: '^8.0.0' } }));
   put(join(hooks, 'node_modules', '.package-lock.json'), JSON.stringify({ packages: { 'node_modules/typescript': { version: installedTs } } }));
   if (pg) {
     put(join(hooks, 'node_modules', 'pg', 'package.json'), JSON.stringify({ name: 'pg', main: 'index.js' }));
@@ -1934,6 +1936,84 @@ test('deps:hooks-install WARNs with the version pair when installed typescript d
   assert.match(c.detail, /npm ci/);
   seedHooksInstall(fx.repo, { installedTs: '7.0.2', lockTs: '7.0.2' });
   assert.equal(run(fx).checks['deps:hooks-install'].status, 'PASS');
+});
+
+// Card coord-guard-parser-followups, item 4: every package that .claude/hooks/package.json declares (dependencies and
+// devDependencies) has node_modules/<name>/package.json. A gap is a FAIL that names the package. It runs BEFORE the typescript pair,
+// so a drifted typescript cannot hide a missing package as a WARN. (sh-syntax was missing in the primary after PR 718.)
+/** Declares packages in the primary's .claude/hooks/package.json and installs a stub folder for each name in `installed`. */
+function declareHooksDeps(repo, { dependencies = {}, devDependencies = {}, installed = [] } = {}) {
+  const hooks = join(repo, '.claude', 'hooks');
+  put(join(hooks, 'package.json'), JSON.stringify({ name: 'hooks-fixture', dependencies, devDependencies }));
+  for (const name of installed) put(join(hooks, 'node_modules', name, 'package.json'), JSON.stringify({ name, version: '1.0.0' }));
+}
+const DECLARED = { dependencies: { pg: '^8.0.0', 'sh-syntax': '^0.8.1' }, devDependencies: { typescript: '^5.9.3', '@types/node': '^20.0.0' } };
+
+test('deps:hooks-install FAILs and names a declared package that is not installed (sh-syntax), with the fix', () => {
+  const fx = fixture();
+  seedHooksInstall(fx.repo);
+  declareHooksDeps(fx.repo, { ...DECLARED, installed: ['typescript', '@types/node'] });
+  const c = run(fx).checks['deps:hooks-install'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /sh-syntax/);
+  assert.doesNotMatch(c.detail, /@types\/node|typescript/);
+  assert.match(c.detail, /npm ci/);
+});
+
+test('deps:hooks-install counts devDependencies and scoped names: a missing @types/node is a FAIL that names it', () => {
+  const fx = fixture();
+  seedHooksInstall(fx.repo);
+  declareHooksDeps(fx.repo, { ...DECLARED, installed: ['typescript', 'sh-syntax'] });
+  const c = run(fx).checks['deps:hooks-install'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /@types\/node/);
+});
+
+test('deps:hooks-install: a missing package is a FAIL even when installed typescript differs from the lock (the check runs before the version pair)', () => {
+  const fx = fixture();
+  seedHooksInstall(fx.repo, { installedTs: '5.9.3', lockTs: '7.0.2' });
+  declareHooksDeps(fx.repo, { ...DECLARED, installed: ['typescript', '@types/node'] });
+  const c = run(fx).checks['deps:hooks-install'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /sh-syntax/);
+});
+
+test('deps:hooks-install PASSes with every declared package installed, and says how many', () => {
+  const fx = fixture();
+  seedHooksInstall(fx.repo);
+  declareHooksDeps(fx.repo, { ...DECLARED, installed: ['typescript', 'sh-syntax', '@types/node'] });
+  const c = run(fx).checks['deps:hooks-install'];
+  assert.equal(c.status, 'PASS', c.detail);
+  assert.match(c.detail, /4 declared packages present/);
+});
+
+// A check that reads no declared package is vacuous: a missing, unreadable or empty package.json is a WARN that names the file, never a PASS.
+for (const [what, write] of [
+  ['is missing', (file) => rmSync(file, { force: true })],
+  ['is not valid JSON', (file) => put(file, '{ not json')],
+  ['declares no packages', (file) => put(file, JSON.stringify({ name: 'hooks-fixture', dependencies: {}, devDependencies: {} }))],
+]) {
+  test(`deps:hooks-install WARNs and names package.json when it ${what} (the check has nothing to read)`, () => {
+    const fx = fixture();
+    const file = join(fx.repo, '.claude', 'hooks', 'package.json');
+    write(file);
+    const c = run(fx).checks['deps:hooks-install'];
+    assert.equal(c.status, 'WARN', c.detail);
+    assert.match(c.detail, /package\.json/);
+    assert.match(c.detail, /no declared packages|cannot be read|declares no packages/);
+  });
+}
+
+test('deps:hooks-install lists at most 8 missing packages, then the count of the rest', () => {
+  const fx = fixture();
+  seedHooksInstall(fx.repo);
+  const many = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`zz-missing-${String(i).padStart(2, '0')}`, '^1.0.0']));
+  declareHooksDeps(fx.repo, { dependencies: { pg: '^8.0.0', ...many }, installed: [] });
+  const c = run(fx).checks['deps:hooks-install'];
+  assert.equal(c.status, 'FAIL', c.detail);
+  assert.match(c.detail, /zz-missing-07/);
+  assert.doesNotMatch(c.detail, /zz-missing-08/);
+  assert.match(c.detail, /\+3 more/);
 });
 
 // ---- deps:store-link: the shared store link <primary>/.claude/worktrees/node_modules -> <primary>/.claude/hooks/node_modules ----
