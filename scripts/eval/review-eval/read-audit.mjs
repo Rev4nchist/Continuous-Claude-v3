@@ -16,7 +16,7 @@
 // The verdict line and the scan count the exempt entries, tree level and folder level apart, each split into tracked and harness. They also count stream gaps (a reconnecting event or a resume
 // retry; a count, never a void). A verdict line never holds a path, key, entry or event type from a tool call. It does hold stream text that is not a path: the init model, the raw call id
 // and the name of an unknown tool-call key (the tool kind). Rule entries hold a rule name, a tool kind, a field name and a call id.
-// AUDIT_VERSION is 2. Version 2 adds the head rule climb-name, link names looked up without letter case, a backslash in a link name as a void, a second link walk on slash only,
+// AUDIT_VERSION is 2. Version 2 adds the head rule climb-name, link names looked up without letter case (two link names that differ only in letter case void the head), a backslash in a link name as a void, a second link walk on slash only,
 // and the line fields runOk and resultEvents. A version 1 line holds neither field. Raise it on any rule or line-format change.
 // CLI: read-audit.mjs <stream> [--run-id --kind --head --repo <dir> --state <file> --no-record] | --scan [--root <dir> --prefix <p> --repo <dir>] | --summary (--runs <file> | --heads <dir>...) [--state <file>]
 import { spawnSync } from 'node:child_process';
@@ -413,7 +413,8 @@ export function readHeadCommit({ git, head }) {
   const rules = [];
   const tracked = new Set();
   const links = new Map(); // lower-case name -> target of every mode 120000 entry the head holds (the lookup key of a case-blind file system)
-  const linkList = []; // [name, target] of each link, so two names that differ only in letter case are both checked
+  const caseNames = new Map(); // lower-case link name -> the name as written, to find a collision
+  const linkList = [];// [name, target] of each link, so two names that differ only in letter case are both checked
   for (const entry of String(ls.stdout ?? '').split('\0')) {
     const m = /^(\d+) \w+ ([0-9a-f]+)\t([\s\S]+)$/.exec(entry);
     if (!m) continue;
@@ -421,6 +422,9 @@ export function readHeadCommit({ git, head }) {
     if (m[3].split('/').some((seg) => CLIMB_SEG.test(seg))) rules.push(CLIMB_NAME); // git cannot hold a segment of exactly two dots, so every such segment is a hit
     if (m[1] !== '120000') continue;
     if (m[3].includes('\\')) rules.push(SYMLINK); // a POSIX lookup reads a\b as one name, a Windows lookup as two
+    const lower = m[3].toLowerCase();
+    if (caseNames.has(lower) && caseNames.get(lower) !== m[3]) rules.push(SYMLINK); // fail closed: two link names that differ only in letter case. The lower-case map keeps one target, so no walk can read both; such a head cannot be checked out on a case-blind file system
+    caseNames.set(lower, m[3]);
     const blob = git(['cat-file', 'blob', m[2]]);
     if (blob.status !== 0) rules.push(FAILED);
     else { links.set(m[3].toLowerCase(), String(blob.stdout ?? '')); linkList.push([m[3], String(blob.stdout ?? '')]); }
