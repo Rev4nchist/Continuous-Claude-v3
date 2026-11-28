@@ -21,7 +21,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertScratchUrl, maskUrl } from '../coordination/scratch-db.mjs';
+import { assertScratchUrl, maskUrl, scratchUrlFor } from '../coordination/scratch-db.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, '..', '..');
@@ -31,21 +31,39 @@ const HOOKS_DIR = path.join(REPO, '.claude', 'hooks');
 const MIN = 60_000;
 export const TEST_FILE = 'src/__tests__/lane-context-db.test.ts';
 export const THROUGH = '6';
+// F2: the test file holds 19 tests. A run with fewer fails, so a deleted test cannot pass as "all passed". Delete a test: lower this in the same change.
+export const MIN_TESTS = 19;
+// F3: the name scratch-db create prints (lanes_pr1_ plus 8 lower-case hex): the only name this gate drops after a create that gave no url.
+const CREATED_NAME = /^creating scratch database (lanes_pr1_[0-9a-f]{8}) on /m;
 // The labels scratch-db.mjs gives the files it applies (runWholeFile and runDrizzleFile), followed by its "failed" text.
 const SCHEMA_FAILURE = /^(docker\/init-schema\.sql|coordination\/migrations\/[^ ]+|drizzle\/[^ ]+) failed\b/;
 const USAGE = 'usage: node scripts/github/lane-context-db-gate.mjs\n'
   + 'Makes a scratch database (scratch-db.mjs create --through 6), runs vitest on .claude/hooks/' + TEST_FILE + ' with LANE_TEST_DB_URL,\n'
   + 'drops the database. Exit 0 only when every test of the file ran and passed; a skipped file fails. No Postgres: exit 1, one ENV: line.\n';
 
+/** The password of a url, from the userinfo or a ?password= value: raw, decoded and re-encoded. Under 3 characters: none (a mask would hit every match). */
+function secretsOf(url) {
+  const found = new Set();
+  try {
+    const u = new URL(url);
+    for (const raw of [u.password, u.searchParams.get('password') ?? ''].filter(Boolean)) {
+      let dec = raw;
+      try { dec = decodeURIComponent(raw); } catch { /* keep the raw text */ }
+      for (const v of [raw, dec, encodeURIComponent(dec)]) found.add(v);
+    }
+  } catch { /* not a url: nothing more to hide */ }
+  return [...found].filter((v) => v.length >= 3).sort((a, b) => b.length - a.length);
+}
+
 /** Hide each url, its password and any other scheme://user:pass@ in text before it is printed. */
 export function redact(text, ...urls) {
   let s = String(text ?? '');
   for (const url of urls.filter(Boolean)) {
     s = s.split(url).join(maskUrl(url));
-    let pw = '';
-    try { pw = decodeURIComponent(new URL(url).password); } catch { /* not a url: nothing more to hide */ }
-    if (pw.length >= 3) s = s.split(pw).join('***');
+    for (const pw of secretsOf(url)) s = s.split(pw).join('***');
   }
+  // F5: a password given as a query value, in any text, even when no told url names it.
+  s = s.replace(/([?&]password=)[^&\s'"`]+/gi, '$1***');
   return s.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`]+/gi, (m) => maskUrl(m));
 }
 
@@ -60,7 +78,9 @@ export function verdict(status, report) {
   const t = Number(report.numTotalTests ?? 0);
   const p = Number(report.numPassedTests ?? 0);
   const s = Number(report.numPendingTests ?? 0) + Number(report.numTodoTests ?? 0);
-  return { ok: status === 0 && t > 0 && p === t && s === 0, line: `lane-context-db: ${p} of ${t} passed, ${s} skipped` };
+  const line = `lane-context-db: ${p} of ${t} passed, ${s} skipped`;
+  if (t < MIN_TESTS) return { ok: false, line: `${line}; FAIL: fewer tests than the floor of ${MIN_TESTS}` };
+  return { ok: status === 0 && p === t && s === 0, line };
 }
 
 /** vitest.mjs found the way Node finds a package from .claude/hooks (walk up, so a worktree uses the shared store link). */
@@ -71,17 +91,36 @@ export function vitestEntry(hooksDir) {
 
 const spawnOpts = (cwd, env, timeout) => ({ cwd, env, encoding: 'utf8', shell: false, windowsHide: true, timeout, maxBuffer: 64 * 1024 * 1024 });
 
+/**
+ * F3. After a create that gave no url, drop the database its stderr named. Only a name that matches CREATED_NAME exactly,
+ * a url from scratchUrl(name) that passes assertScratchUrl, and scratch-db's own drop path. Returns text for the failure
+ * line: empty when nothing was named or the drop worked, else the name (never the url).
+ */
+function leftover({ spawn, env, scratchUrl, stderr }) {
+  const name = CREATED_NAME.exec(String(stderr ?? ''))?.[1];
+  if (!name) return '';
+  const left = `; a scratch database ${name} may be left behind (could not drop it): drop it by hand`;
+  let url = '';
+  try {
+    url = scratchUrl(name);
+    assertScratchUrl(url);
+  } catch { return left; }
+  return dropScratch({ spawn, env, url }).length ? left : '';
+}
+
 /** Step 1 and 2. Returns { url } or { lines } (one ENV line, or a refusal). */
-function createScratch({ spawn, env }) {
+function createScratch({ spawn, env, scratchUrl }) {
   const r = spawn(process.execPath, [SCRATCH_DB, 'create', '--through', THROUGH], spawnOpts(REPO, env, 2 * MIN));
   let url = '';
   try { url = String(JSON.parse(lastLine(r.stdout)).url ?? ''); } catch { /* no JSON: create failed */ }
   if (r.status !== 0 || !url) {
     const cause = lastLine(r.stderr) || (r.error ? String(r.error.message) : '') || `create exited ${r.status} with no url`;
     const why = redact(cause, url, ...baseUrls(env)).replace(/\s+/g, ' ');
+    // F3: a create that was killed (time-out) can leave the database it named. Drop it, or print its name.
+    const left = url ? '' : leftover({ spawn, env, scratchUrl, stderr: r.stderr });
     // scratch-db names the file it could not apply ("<label> failed: ..."). That is a fault in a schema file, not the environment.
-    if (SCHEMA_FAILURE.test(why)) return { lines: [`lane-context-db: FAIL: scratch-db create failed: ${why}`] };
-    return { lines: [`ENV: lane-context-db needs local Postgres for a scratch database: ${why}. This is the environment, not your change. Fix: start Postgres (docker compose up -d in docker/) or set CONTINUOUS_CLAUDE_DB_URL.`] };
+    if (SCHEMA_FAILURE.test(why)) return { lines: [`lane-context-db: FAIL: scratch-db create failed: ${why}${left}`] };
+    return { lines: [`ENV: lane-context-db needs local Postgres for a scratch database: ${why}${left}. This is the environment, not your change. Fix: start Postgres (docker compose up -d in docker/) or set CONTINUOUS_CLAUDE_DB_URL.`] };
   }
   try {
     assertScratchUrl(url);
@@ -120,11 +159,11 @@ function dropScratch({ spawn, env, url }) {
 
 /**
  * The whole gate. Never throws. Returns { code, lines }: the caller prints the lines. `spawn` (spawnSync shape), `env`,
- * `tmpDir`, `hooksDir` and `resolveVitest` are injected so a test needs no database.
+ * `tmpDir`, `hooksDir`, `resolveVitest` and `scratchUrl` are injected so a test needs no database.
  */
-export function run({ spawn = spawnSync, env = process.env, tmpDir = os.tmpdir(), hooksDir = HOOKS_DIR, resolveVitest = vitestEntry } = {}) {
+export function run({ spawn = spawnSync, env = process.env, tmpDir = os.tmpdir(), hooksDir = HOOKS_DIR, resolveVitest = vitestEntry, scratchUrl = scratchUrlFor } = {}) {
   let made;
-  try { made = createScratch({ spawn, env }); } catch (e) {
+  try { made = createScratch({ spawn, env, scratchUrl }); } catch (e) {
     return { code: 1, lines: [`ENV: lane-context-db could not run scratch-db create: ${redact(e.message, ...baseUrls(env)).replace(/\s+/g, ' ')}`] };
   }
   if (!made.url) return { code: 1, lines: made.lines };

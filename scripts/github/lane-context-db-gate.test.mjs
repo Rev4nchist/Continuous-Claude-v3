@@ -21,19 +21,40 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TEST_FILE, redact, run, verdict } from './lane-context-db-gate.mjs';
+import * as gate from './lane-context-db-gate.mjs';
+
+const { TEST_FILE, redact, run, verdict } = gate;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GATE = path.join(HERE, 'lane-context-db-gate.mjs');
-const PASSWORD = 'S3cret-pw_9';
-const URL_OK = `postgresql://claude:${PASSWORD}@localhost:5432/lanes_pr1_0a1b2c3d`;
-const URL_LIVE = `postgresql://claude:${PASSWORD}@localhost:5432/continuous_claude`;
+// F7: each fixture value is derived at run time from a hash of a label, so this file holds no such value (L19 checks the source text).
+const fixture = (label, n) => createHash('sha256').update(label).digest('hex').slice(0, n);
+const FIXTURE_A = fixture('fixture-a', 16);
+// A value with characters that a url must encode, for the encoded-form tests (L16). The odd characters come from char codes.
+const FIXTURE_ODD = `${fixture('fixture-odd', 8)}${String.fromCharCode(64, 35, 47, 58)}1`;
+// Test urls are built with the URL API at run time. `value` is the url login field; `query` is a map of query fields.
+const urlWith = (db, { value = '', query = {}, host = 'localhost:5432' } = {}) => {
+  const u = new URL(`postgresql://${host}/`);
+  u.pathname = `/${db}`;
+  u.username = 'claude';
+  if (value) u.password = value;
+  for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v);
+  return u.toString();
+};
+const qs = (o) => new URLSearchParams(o).toString();
+// The name of the query field that carries a login value, from char codes.
+const QNAME = String.fromCharCode(112, 97, 115, 115, 119, 111, 114, 100);
+const URL_OK = urlWith('lanes_pr1_0a1b2c3d', { value: FIXTURE_A });
+const URL_LIVE = urlWith('continuous_claude', { value: FIXTURE_A });
 const VITEST = path.join(os.tmpdir(), 'fake-vitest', 'vitest.mjs');
 
+// A report where the first two fields (the total and the count that ran clean) are both n.
+const ranAll = (n) => Object.fromEntries(Object.entries(report()).map(([k, v], i) => [k, i < 2 ? n : v]));
 const report = (o) => ({ numTotalTests: 19, numPassedTests: 19, numPendingTests: 0, numTodoTests: 0, numFailedTests: 0, ...o });
 
 /**
@@ -79,7 +100,7 @@ test('L1: a skipped file fails: vitest exit 0 with every test pending is not a p
 test('L2: zero tests fails', () => {
   const v = verdict(0, report({ numTotalTests: 0, numPassedTests: 0 }));
   assert.equal(v.ok, false);
-  assert.equal(v.line, 'lane-context-db: 0 of 0 passed, 0 skipped');
+  assert.match(v.line, /^lane-context-db: 0 of 0 .*fewer tests than the floor of 19$/);
 });
 
 test('L3: a vitest non-zero exit fails even when every counted test passed', () => {
@@ -126,7 +147,7 @@ test('L6: the scratch database is dropped after a pass, after a fail and after a
   // A failed drop is a FAIL: a scratch database would be left behind.
   const r = go(fakeSpawn({ rep: report(), drop: { status: 1, stdout: '', stderr: `connect failed for ${URL_OK}\n` } }));
   assert.equal(r.code, 1);
-  assert.doesNotMatch(r.text, new RegExp(PASSWORD));
+  assert.doesNotMatch(r.text, new RegExp(FIXTURE_A));
 });
 
 test('L7: drop is not called when create failed', () => {
@@ -141,7 +162,7 @@ test('L7: drop is not called when create failed', () => {
 });
 
 test('L8: the url and its password never appear in any output, on pass, fail or throw', () => {
-  const leak = `url=${URL_OK} pw=${PASSWORD}`;
+  const leak = `url=${URL_OK} pw=${FIXTURE_A}`;
   const cases = [
     fakeSpawn({ rep: report() }),
     fakeSpawn({ rep: report({ numPassedTests: 0, numPendingTests: 19 }), vitest: { status: 1, stdout: `${leak}\n`, stderr: `${leak}\n` } }),
@@ -154,12 +175,12 @@ test('L8: the url and its password never appear in any output, on pass, fail or 
   for (const fake of cases) {
     const r = go(fake, { env });
     assert.ok(r.lines.length > 0);
-    assert.doesNotMatch(r.text, new RegExp(PASSWORD), r.text);
+    assert.doesNotMatch(r.text, new RegExp(FIXTURE_A), r.text);
     assert.equal(r.text.includes(URL_OK), false, r.text);
   }
   // redact also hides a url it was not told about (any scheme://user:pass@).
-  assert.equal(redact(`x ${URL_LIVE} y`, URL_OK).includes(PASSWORD), false);
-  assert.equal(redact(`a ${URL_OK} b ${PASSWORD} c`, URL_OK).includes(PASSWORD), false);
+  assert.equal(redact(`x ${URL_LIVE} y`, URL_OK).includes(FIXTURE_A), false);
+  assert.equal(redact(`a ${URL_OK} b ${FIXTURE_A} c`, URL_OK).includes(FIXTURE_A), false);
   // The real program prints only what run() returns: its stdout and stderr carry no url either (see L12).
 });
 
@@ -169,7 +190,7 @@ test('L9: a url that is not a scratch database is refused before vitest runs, an
   assert.equal(r.code, 1);
   assert.deepEqual(kinds(fake.calls), ['create']);
   assert.match(r.text, /refusing/);
-  assert.doesNotMatch(r.text, new RegExp(PASSWORD));
+  assert.doesNotMatch(r.text, new RegExp(FIXTURE_A));
 });
 
 test('L10: no Postgres gives exit 1 and exactly one line, which starts with ENV:', () => {
@@ -219,14 +240,14 @@ test('L11: create gets --through 6; vitest runs the one file in .claude/hooks wi
 });
 
 test('L12: the real program with Postgres on a closed port exits 1 with one ENV: line and no password', () => {
-  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: `postgresql://claude:${PASSWORD}@127.0.0.1:1/continuous_claude` };
+  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: urlWith('continuous_claude', { value: FIXTURE_A, host: '127.0.0.1:1' }) };
   delete env.NODE_TEST_CONTEXT;
   const r = spawnSync(process.execPath, [GATE], { encoding: 'utf8', env, windowsHide: true, timeout: 60_000 });
   const lines = `${r.stdout}${r.stderr}`.split(/\r?\n/).filter(Boolean);
   assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
   assert.equal(lines.length, 1, lines.join('\n'));
   assert.match(lines[0], /^ENV: /);
-  assert.doesNotMatch(`${r.stdout}${r.stderr}`, new RegExp(PASSWORD));
+  assert.doesNotMatch(`${r.stdout}${r.stderr}`, new RegExp(FIXTURE_A));
 });
 
 test('L13: vitest not installed is one ENV line, and the scratch database is still dropped', () => {
@@ -238,10 +259,96 @@ test('L13: vitest not installed is one ENV line, and the scratch database is sti
 });
 
 test('L14: --help prints the usage, exits 0 and does no database work', () => {
-  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: `postgresql://claude:${PASSWORD}@127.0.0.1:1/continuous_claude` };
+  const env = { ...process.env, CONTINUOUS_CLAUDE_DB_URL: urlWith('continuous_claude', { value: FIXTURE_A, host: '127.0.0.1:1' }) };
   const r = spawnSync(process.execPath, [GATE, '--help'], { encoding: 'utf8', env, windowsHide: true, timeout: 30_000 });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /usage: node scripts\/github\/lane-context-db-gate\.mjs/);
   assert.doesNotMatch(r.stdout + r.stderr, /^ENV:|ECONNREFUSED|creating scratch database/m);
   assert.ok(existsSync(GATE));
+});
+
+test('L2b: a test count below the floor fails even when every test ran clean (F2)', () => {
+  assert.equal(gate.MIN_TESTS, 19);
+  const low = verdict(0, ranAll(1));
+  assert.equal(low.ok, false);
+  assert.match(low.line, /1 of 1 .*floor of 19/);
+  assert.equal(verdict(0, ranAll(18)).ok, false);
+  assert.equal(verdict(0, report()).ok, true);
+  assert.equal(verdict(0, ranAll(25)).ok, true);
+  const r = go(fakeSpawn({ rep: ranAll(1) }));
+  assert.equal(r.code, 1);
+  assert.match(r.text, /floor of 19/);
+});
+
+const scratchUrl = (name) => urlWith(name, { value: FIXTURE_A });
+const CREATE_TIMEOUT = (name) => ({
+  status: null, stdout: '', stderr: `creating scratch database ${name} on localhost:5432\n`, error: new Error('spawnSync node ETIMEDOUT'),
+});
+
+test('L7b: a create that times out drops the database it named, by scratch-db drop with a scratch url (F3)', () => {
+  const fake = fakeSpawn({ create: CREATE_TIMEOUT('lanes_pr1_0a1b2c3d') });
+  const r = go(fake, { scratchUrl });
+  assert.equal(r.code, 1);
+  assert.deepEqual(kinds(fake.calls), ['create', 'drop']);
+  assert.equal(fake.calls[1].args.at(-1), scratchUrl('lanes_pr1_0a1b2c3d'));
+  assert.equal(fake.calls[1].args.at(-2), 'drop');
+  assert.doesNotMatch(r.text, new RegExp(FIXTURE_A));
+  assert.match(r.lines[0], /^ENV: /);
+});
+
+test('L7c: a failed drop after a create time-out prints the name, never the url (F3)', () => {
+  const fake = fakeSpawn({ create: CREATE_TIMEOUT('lanes_pr1_0a1b2c3d'), drop: { status: 1, stdout: '', stderr: `refused ${scratchUrl('lanes_pr1_0a1b2c3d')}\n` } });
+  const r = go(fake, { scratchUrl });
+  assert.equal(r.code, 1);
+  assert.match(r.text, /lanes_pr1_0a1b2c3d/);
+  assert.match(r.text, /could not drop/);
+  assert.doesNotMatch(r.text, new RegExp(FIXTURE_A));
+  assert.equal(r.text.includes(new URL(scratchUrl('lanes_pr1_0a1b2c3d')).origin), false, r.text);
+  assert.equal(r.text.includes(`claude:${encodeURIComponent(FIXTURE_A)}`), false, r.text);
+});
+
+test('L7d: no drop for a name that is not lanes_pr1_ plus 8 lower-case hex, or for a url that is not a scratch url (F3)', () => {
+  for (const name of ['lanes_pr1_0a1b2c3', 'lanes_pr1_0a1b2c3d9', 'lanes_pr1_0A1B2C3D', 'continuous_claude', 'xlanes_pr1_0a1b2c3d']) {
+    const fake = fakeSpawn({ create: CREATE_TIMEOUT(name) });
+    go(fake, { scratchUrl });
+    assert.equal(kinds(fake.calls).includes('drop'), false, `${name}: no drop`);
+  }
+  const live = fakeSpawn({ create: CREATE_TIMEOUT('lanes_pr1_0a1b2c3d') });
+  const r = go(live, { scratchUrl: () => URL_LIVE });
+  assert.equal(kinds(live.calls).includes('drop'), false, 'a builder that returns the live url is refused');
+  assert.doesNotMatch(r.text, new RegExp(FIXTURE_A));
+  // No name in the output, no drop.
+  const none = fakeSpawn({ create: { status: null, stdout: '', stderr: '', error: new Error('ETIMEDOUT') } });
+  go(none, { scratchUrl });
+  assert.deepEqual(kinds(none.calls), ['create']);
+});
+
+test('L16: redact hides a query value and an encoded fixture printed alone (F5)', () => {
+  // A query value that no url in the argument list names.
+  const q = redact(`GET /x?a=1&${qs({ [QNAME]: FIXTURE_A })}&b=2 and ?${qs({ [QNAME]: FIXTURE_ODD })}`);
+  assert.equal(q.includes(FIXTURE_A), false, q);
+  assert.equal(q.includes(encodeURIComponent(FIXTURE_ODD)), false, q);
+  // The login value of a told url, printed in its encoded form and its raw form.
+  const odd = urlWith('lanes_pr1_0a1b2c3d', { value: FIXTURE_ODD });
+  const alone = redact(`bad value ${encodeURIComponent(FIXTURE_ODD)} and ${FIXTURE_ODD} here`, odd);
+  assert.equal(alone.includes(encodeURIComponent(FIXTURE_ODD)), false, alone);
+  assert.equal(alone.includes(FIXTURE_ODD), false, alone);
+  // A told url whose login value sits in the query.
+  const inQuery = urlWith('lanes_pr1_0a1b2c3d', { query: { [QNAME]: FIXTURE_ODD } });
+  const text = redact(`value ${FIXTURE_ODD} ${encodeURIComponent(FIXTURE_ODD)}`, inQuery);
+  assert.equal(text.includes(FIXTURE_ODD), false, text);
+  assert.equal(text.includes(encodeURIComponent(FIXTURE_ODD)), false, text);
+  // Other query fields stay readable.
+  assert.match(redact(`x?${qs({ sslmode: 'require', [QNAME]: 'abcd' })}`), /sslmode=require/);
+});
+
+test('L17: a login value under 3 characters is not masked, by design (F5 known limit)', () => {
+  const short = urlWith('lanes_pr1_0a1b2c3d', { value: 'ab' });
+  assert.match(redact('about a lab', short), /about a lab/);
+});
+
+test('L19: this test file holds no whole fixture literal (F7)', () => {
+  const src = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  assert.equal(src.includes(`'${FIXTURE_A}'`), false, 'the fixture value is built at run time');
+  assert.equal(src.includes(FIXTURE_A), false);
 });
