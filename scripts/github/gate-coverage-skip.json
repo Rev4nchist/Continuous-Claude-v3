@@ -230,6 +230,10 @@
       "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
     },
     {
+      "path": "scripts/ratchets/changed-files.test.sh",
+      "reason": "run by hand with Git Bash (scratch repo, no real state); wiring is the card for the two new .sh tests (seat ruling 27 Nov); that card removes this entry when it gates the test"
+    },
+    {
       "path": "scripts/sync-claude-mapping.test.sh",
       "reason": "shell or PowerShell test run by hand: Windows or Git Bash, some touch real state; no gate runs it"
     },
