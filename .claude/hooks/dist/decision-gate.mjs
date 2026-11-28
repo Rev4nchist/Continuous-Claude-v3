@@ -4130,9 +4130,9 @@ function judgeLand(shape, deps, dir, cmd) {
   if (route === "app") return judgeAppMerge(shape, deps, dir, cmd);
   if (route === "foreign") return deny("repo-foreign", goThereWhy(cmd.repo));
   if (shape.pr === null) return deny("no-pr", NO_PR_WHY);
-  if (shape.kind === "merge" && shape.shaBad) return deny("merge-no-head", `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr}).`);
+  if (shape.kind === "merge" && shape.shaBad) return deny("merge-no-head", `PR #${shape.pr}: ${HEAD_UNREAD_WHY(shape.pr)} The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr} --json).`);
   const sha = shape.sha ?? void 0;
-  if (shape.kind === "merge" && !sha) return deny("merge-no-head", `${shape.pr ? `PR #${shape.pr}` : "this PR"}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? "<n>"} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? "<n>"}).`);
+  if (shape.kind === "merge" && !sha) return deny("merge-no-head", `${shape.pr ? `PR #${shape.pr}` : "this PR"}: a raw merge command names no head, so Dave's tap cannot be tied to the head that would land. Run land-pr.ps1 -Pr ${shape.pr ?? "<n>"} (it pins the head), or pass the tapped head: gh api .../merge -f sha=<head>, gh pr merge --match-head-commit <head>. The Land question must be tapped first (ship-ask.mjs land --pr ${shape.pr ?? "<n>"} --json).`);
   const key = decisionKey2({ pr: shape.pr });
   const ok = decisionRows(deps.env).some((r) => r.step === "land" && r.key === key && isLandLabel(r.label) && (!sha || r.head.toLowerCase() === sha));
   return ok ? ALLOW : deny("land", landWhy(shape.pr));
@@ -4849,6 +4849,46 @@ function unreadableInput() {
   }
   return "{}";
 }
+var TOO_BIG = { pipes: 1500, depth: 100, pwshWords: 20, chars: 3e4 };
+var BIG_PWSH_RE = /\b(?:pwsh|powershell)\b/gi;
+var gatedWord = (t) => PROGRAM_WORDS.test(t) || VERB_WORDS.test(t) || USE_TAP_RE.test(t) || STORE_CODE_RE.test(t) || STORE_FN_RE.test(t) || STORE_TEXT_RE.test(norm(t));
+function tooBigReason(input) {
+  try {
+    const cmd = readShellCommand(input);
+    if (cmd.kind !== "command" || cmd.text === "") return null;
+    const t = cmd.text;
+    let pipes = 0, depth = 0, deepest = 0;
+    for (let i = 0; i < t.length; i++) {
+      const c = t.charCodeAt(i);
+      if (c === 124) pipes++;
+      else if (c === 123 || c === 40 || c === 91) {
+        if (++depth > deepest) deepest = depth;
+      } else if ((c === 125 || c === 41 || c === 93) && depth > 0) depth--;
+    }
+    const pwsh = (t.match(BIG_PWSH_RE) ?? []).length;
+    const over = pipes >= TOO_BIG.pipes || deepest >= TOO_BIG.depth || pwsh >= TOO_BIG.pwshWords || t.length >= TOO_BIG.chars;
+    if (!over || !gatedWord(t)) return null;
+    return `BLOCKED (decision-gate): this command text is too big to judge inside the hook's time limit (${pipes} pipe characters, bracket depth ${deepest}, ${pwsh} pwsh words, ${t.length} characters; the limits are ${TOO_BIG.pipes}, ${TOO_BIG.depth}, ${TOO_BIG.pwshWords} and ${TOO_BIG.chars}) and it names a git, gh or decision-store call. A hook that is killed at its time limit lets the call run, so the text is refused unread. Write the data to a file with the Write tool and run a short command that reads the file.`;
+  } catch {
+    return null;
+  }
+}
+function tooBigOut(raw) {
+  try {
+    const parsed = JSON.parse(raw.trim() || "{}");
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const input = parsed;
+    const why = tooBigReason(input);
+    if (why === null) return null;
+    try {
+      logGuardDecision(HOOK, input, "deny", "too-big");
+    } catch {
+    }
+    return denyOut(why);
+  } catch {
+    return null;
+  }
+}
 function handle(raw, deps) {
   let input = {};
   try {
@@ -4858,6 +4898,8 @@ function handle(raw, deps) {
   } catch {
     return unreadableInput();
   }
+  const big = tooBigOut(raw);
+  if (big !== null) return big;
   const found = [];
   try {
     const d = decide(input, deps, found);
@@ -5130,6 +5172,11 @@ async function main2() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   const raw = Buffer.concat(chunks).toString("utf-8");
+  const big = tooBigOut(raw);
+  if (big !== null) {
+    console.log(big);
+    return;
+  }
   console.log(handle(raw, await withParsed(raw, realDeps({ start }))));
 }
 if (!process.env.VITEST) {
@@ -5144,6 +5191,7 @@ export {
   GitDeadlineError,
   MissingCwdError,
   SCRIPT_RUNNERS,
+  TOO_BIG,
   WRITE_TOOLS,
   astCreates,
   astMerges,
@@ -5161,6 +5209,8 @@ export {
   realDeps,
   scriptRunnerDenies,
   scriptRunnerLateDenies,
+  tooBigOut,
+  tooBigReason,
   withParsed
 };
 /*! Bundled license information:
