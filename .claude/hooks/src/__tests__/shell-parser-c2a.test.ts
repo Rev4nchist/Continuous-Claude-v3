@@ -220,8 +220,13 @@ describe('CS: the astOnly seam is test-only', () => {
     if (!existsSync(BUILT)) return; // the built hook is part of the PR; a checkout without a build has nothing to run
     const env: NodeJS.ProcessEnv = { ...process.env, ASTONLY: '1', AST_ONLY: '1', CCV3_AST_ONLY: '1', C2_PROTO: '1', DECISION_GATE_AST_ONLY: '1', STEP0_MODE: 'proto' };
     delete env.VITEST;
+    // Card coord-test-log-leak: the child has no VITEST, so it logs its decision. Name a temp log file, or the row goes to the real log.
+    const logFile = join(dir, 'cs2-guard.jsonl');
     const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: `grep -n "${M}" notes.md`, astOnly: true }, cwd: ROOT, session_id: 'c2a-cs2', astOnly: true });
     const r = spawnSync(process.execPath, [BUILT], { input: payload, encoding: 'utf8', env, timeout: 30000, cwd: ROOT });
     expect(r.stdout, r.stderr).toMatch(/"permissionDecision"\s*:\s*"deny"/);
+    // The decision row is in the temp file, marked as a probe: the override reached the child.
+    const rows = readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { session_id: string; decision: string; source: string });
+    expect(rows.some((o) => o.session_id === 'c2a-cs2' && o.decision === 'deny' && o.source === 'probe')).toBe(true);
   });
 });
