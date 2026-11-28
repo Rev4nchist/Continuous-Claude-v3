@@ -435,10 +435,11 @@ export const SURFACES = [
 const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
 const touches = (surface, paths) => paths.some((p) => surface.globs.some((g) => matchGlob(g, p)));
 
-function resolveGate(gate, paths) {
+/** `exists`: (repo path) => boolean, or null for no check. A touched path that is gone (deleted, or the old side of a move) is not appended to the command: scope counts it, the tool never sees it. */
+function resolveGate(gate, paths, exists = null) {
   if (!gate.appendTouched) return { ...gate };
   const { globs, relativeTo } = gate.appendTouched;
-  const files = paths.filter((p) => globs.some((g) => matchGlob(g, p))).map((p) => path.posix.relative(relativeTo, p));
+  const files = paths.filter((p) => globs.some((g) => matchGlob(g, p)) && (!exists || exists(p))).map((p) => path.posix.relative(relativeTo, p));
   return files.length === 0 ? null : { ...gate, args: [...gate.args, ...files] };
 }
 
@@ -455,17 +456,21 @@ export function buildInputExternals(root) {
   } catch { return []; }
 }
 
+/** (repo path) => does the file exist under root. A path that a branch deleted or moved away does not (card changed-files-renames). */
+export const onDisk = (root) => (p) => existsSync(path.join(root, p));
+
 /**
  * The gates a change set needs: the touched surfaces' gates once each, then the always gates. The cheap gates (`cheap: true`)
  * come first, each group in table order, so a FAIL of a static check shows before the minutes-long gates start.
  * `externals` (buildInputExternals) adds the hooks surface for a changed file that a hook bundle imports, so its dist is checked.
+ * `exists` (optional): (repo path) => boolean. A gate that appends touched files gets only those that exist (see resolveGate).
  */
-export function gatesFor(changed, externals = []) {
+export function gatesFor(changed, externals = [], exists = null) {
   const paths = changed.map(norm);
   const out = [];
   const add = (gate) => {
     if (out.some((g) => g.id === gate.id)) return; // two surfaces can name one gate: it runs once
-    const resolved = resolveGate(gate, paths);
+    const resolved = resolveGate(gate, paths, exists);
     if (resolved) out.push(resolved);
   };
   const ext = new Set(Array.isArray(externals) ? externals.map(norm) : []); // older callers pass a root string here: it adds nothing
@@ -481,11 +486,11 @@ export function withBase(gate, base) {
 }
 
 /** One NOTE line for each touched surface with a `manual` text, and for a gate dropped because no test file was touched. */
-export function manualNotes(changed) {
+export function manualNotes(changed, exists = null) {
   const paths = changed.map(norm);
   const touched = SURFACES.filter((s) => touches(s, paths));
   const note = (s, detail) => ({ step: `manual:${s.id}`, status: 'NOTE', detail, notes: [] });
-  const dropped = touched.flatMap((s) => (s.gates ?? []).filter((g) => g.appendTouched && resolveGate(g, paths) === null).map((g) => note(s, g.appendTouched.noneNote)));
+  const dropped = touched.flatMap((s) => (s.gates ?? []).filter((g) => g.appendTouched && resolveGate(g, paths, exists) === null).map((g) => note(s, g.appendTouched.noneNote)));
   return [...touched.filter((s) => s.manual).map((s) => note(s, s.manual)), ...dropped];
 }
 
@@ -496,7 +501,7 @@ export function unownedNotes(changed, config) {
     .map((p) => ({ step: `unowned:${p}`, status: 'NOTE', detail: 'no surface owns this path, so no gate ran for it beyond the always gate', notes: [] }));
 }
 
-export const notesFor = (changed, config) => [...manualNotes(changed), ...unownedNotes(changed, config)];
+export const notesFor = (changed, config, exists = null) => [...manualNotes(changed, exists), ...unownedNotes(changed, config)];
 
 // ---------- small helpers ----------
 
@@ -633,9 +638,12 @@ function checkBehind(git, base, fetched = null) {
   return result('git:behind', 'PASS', `0 commits behind ${counts.map((c) => c.name).join(' and ')} (${caveat})`);
 }
 
-/** { result, paths }: `git diff --name-only <from>...HEAD` (`from` is the pinned base commit, else the base name). No files is a FAIL. */
+/**
+ * { result, paths }: `git diff --name-only --no-renames <from>...HEAD` (`from` is the pinned base commit, else the base name). No files is a FAIL.
+ * --no-renames: a moved file lists its old path and its new path, so a file moved out of a surface still runs that surface's gates (card changed-files-renames).
+ */
 export function changedFiles(git, base, from = base) {
-  const r = git(['diff', '--name-only', `${from}...HEAD`]);
+  const r = git(['diff', '--name-only', '--no-renames', `${from}...HEAD`]);
   const paths = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (r.status !== 0) return { paths: [], result: result('changes', 'FAIL', `git diff ${base}...HEAD failed: ${clip(r.stderr.trim(), 120)}`) };
   if (paths.length === 0) return { paths, result: result('changes', 'FAIL', `no files differ from ${base}: nothing to open a PR for`) };
@@ -2087,7 +2095,7 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
   const stopCause = () => (keepGoing ? undefined : results.find((r) => r.status === 'FAIL' && r !== settledByGates));
   // The env step (after git:clean, before the gates): each gate that will run must find its packages. A missing one is ONE FAIL
   // line that names the package, the folders tried and the fix, and that gate does not run. A clean primary or CI adds no line.
-  const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root)), changed: changes.paths });
+  const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root), onDisk(root)), changed: changes.paths });
   if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
   if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
   const crArgs = () => ({ root, branch, head: head ?? '', base, now, runner: crRunner, skip: skipCr, timeoutMs: crTimeout, log, cliCapUsd: cliCapOf(cfg, { override: capOverride?.usd }), capOverride, claimOverride, ledgerPath, config: cfg, changedPaths: changes.paths, docsOnly: docsVerified, guardPaths: bothSidePaths(git, `${baseCommit}...HEAD`), guardBase: guardBaseOf(git, base), headGit: git, baseCommit, crStore });
@@ -2126,7 +2134,7 @@ async function runPrePrSteps({ root, base = 'main', bodyText, bodyPath = null, s
     const hint = greenLineHint({ bodyText, bodyPath, head });
     if (hint) results.splice(evidenceAt + 1, 0, result('evidence:hint', 'NOTE', hint));
   }
-  results.push(...notesFor(changes.paths, cfg));
+  results.push(...notesFor(changes.paths, cfg, onDisk(root)));
   // The advisories run scanners (osv needs the network). A run that stopped at a FAIL does not start them.
   if (keepGoing || !results.some((r) => r.status === 'FAIL')) {
     // Advisory only (one-week trial): a NOTE line when the diff touches .github/workflows/*, never a FAIL.
@@ -2209,7 +2217,7 @@ export async function runPreflight({ root, base = 'main', bodyText, bodyPath = n
   if (head && bodyPath && greenRewriteCandidate({ git, base, bodyText, head, evidence }) && greenRewrite({ git, base, bodyText, head, paths: changes.paths, config: cfg, evidence }) !== null) {
     results[evidenceAt] = result('evidence', 'NOTE', `${evidence.detail} (the run settles a stale GREEN line after its gates)`, evidence.notes);
   }
-  const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root)), changed: changes.paths });
+  const envRes = envCheck({ root, gates: gatesFor(changes.paths, buildInputExternals(root), onDisk(root)), changed: changes.paths });
   if (envRes.fail) results.push(result('env', 'FAIL', envRes.fail, envRes.others));
   if (envRes.note) results.push(result('env', 'NOTE', envRes.note));
   for (const gate of envRes.gates.filter((g) => g.cheap)) {
