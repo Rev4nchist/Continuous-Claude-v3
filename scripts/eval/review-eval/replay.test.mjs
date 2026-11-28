@@ -7,7 +7,7 @@
 //  F9  budget used                      -> skip cursorBudget in replayRun
 //  sF10 replay never writes under local-review/ -> let outDir or the runs file sit under state/local-review
 //  build-only starts no agent and writes no ledger line -> call runReview in build-only mode
-// Read audit (re-answer-key-audit), R1-R6 at the end:
+// Read audit (re-answer-key-audit), R1-R9 at the end (R7 and R8 per path, R7c the runOk seam):
 //  R1  cursor-review path: a stream that read outside the tree -> a failed, void row that no score counts; drop the audit call in replayRun
 //  R2  engine path: the same for <runId>.stream.jsonl.gz        -> drop the audit call in replayEngine
 //  R3  a cap writes no verdict line                              -> audit every row, not only ok rows (breaks the shadow retry)
@@ -644,3 +644,13 @@ for (const [title, , make] of PATHS) {
     assert.match(none.text, /unaudited: 1\b/);
   });
 }
+
+test('R7c cursor-review: deps.auditOpts cannot switch off no-result for a run with status ok (breaks if runOk comes from the spread)', async () => {
+  const { deps, calls } = baseDeps(tmp());
+  deps.auditOpts = { ...deps.auditOpts, runOk: false };
+  calls.stream = 'clean-nores';
+  const r = await replayRun({ pr: 207, round: 1 }, deps);
+  assert.deepEqual([r.exit, r.status, r.record.void], [1, 'failed', true]);
+  assert.match(r.record.reason, /^read-audit: .*no-result/);
+  assert.deepEqual(readLines(deps.auditOpts.statePath).map((l) => [l.runOk, l.resultEvents]), [[true, 0]]);
+});

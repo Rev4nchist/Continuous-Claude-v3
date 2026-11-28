@@ -154,7 +154,7 @@ export async function replayRun({ pr, round, buildOnly = false, set = 'holdout',
   let found = {};
   if (res.findingsPath) { try { found = (deps.readFindings ?? readJson)(res.findingsPath); } catch { found = {}; } }
   const status = res.exit === 0 ? 'ok' : res.exit === 3 ? 'cap' : 'failed';
-  const audit = status === 'ok' ? auditReplay({ env, ...deps.auditOpts, kind: 'cursor-review', streamPath: res.rawPath ?? res.findingsPath?.replace(/\.findings\.json$/, '.raw.json') ?? null, runId: res.runId, head: r.sha40, pr, round, git }) : null;
+  const audit = status === 'ok' ? auditReplay({ env, ...deps.auditOpts, kind: 'cursor-review', runOk: true, streamPath: res.rawPath ?? res.findingsPath?.replace(/\.findings\.json$/, '.raw.json') ?? null, runId: res.runId, head: r.sha40, pr, round, git }) : null;
   const rec = record({
     status, base40: r.base, range: r.range, cursorRunId: res.runId ?? null, findingsPath: res.findingsPath ?? null, durationMs: found.durationMs ?? 0,
     usage: found.usage ?? null, findingCount: Array.isArray(found.findings) ? found.findings.length : 0, ...(res.error || res.reason ? { reason: res.error ?? res.reason } : {}), ...audit?.patch,

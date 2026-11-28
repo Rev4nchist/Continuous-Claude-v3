@@ -1560,3 +1560,103 @@ test('F9 the verdict line carries the gap count, and the scan counts streams wit
   assert.equal(main(['--scan', '--root', root], c), 0);
   assert.match(c.text(), /streams with a gap: 1, gap events: 2/);
 });
+
+// ---- read-audit-followups: letter case, climb names, backslash names, runOk and result count on the line ----
+/** A scripted git whose head holds plain files (mode 100644) with these names. */
+function scriptedNames(namesList) {
+  const ls = namesList.map((name, i) => `100644 blob ${String(i + 1).padStart(40, '0')}\t${name}\0`).join('');
+  return (args) => (args[0] === 'ls-tree' ? { status: 0, stdout: ls, stderr: '' } : { status: 1, stdout: '', stderr: '' });
+}
+const rulesOfNames = (list, rule) => checkHeadSymlinks({ git: scriptedNames(list), head: HEAD }).filter((x) => x.rule === rule);
+
+test('FU1 link names are looked up without letter case: Alias -> . and leak -> alias/../outside voids', () => {
+  // Breaks when: the links map or its lookup keeps letter case. A case-blind file system (WSL on NTFS, macOS) follows alias to Alias, then leaves the tree.
+  assert.equal(symlinkRules({ Alias: '.', leak: 'alias/../outside' }).length, 1);
+  assert.equal(symlinkRules({ 'A/b/Up': '..', 'c/leak': '../a/B/UP/../../y' }).length, 1, 'a chain with mixed case at two links');
+  assert.deepEqual(symlinkRules({ Alias: 'sub', 'sub2/l': '../ALIAS/x' }), [], 'a mixed-case link that stays inside passes');
+});
+
+test('FU2 a tracked name with a segment of dots and spaces voids with climb-name; a normal dot name passes', () => {
+  // Breaks when: the head check reads link targets only, or the segment test is not the climb test (a name such as ..foo or .hidden must pass).
+  for (const bad of ['a/.. /x', 'a/.../x', 'a/. /x', '.. ']) assert.equal(rulesOfNames(['f.txt', bad], 'climb-name').length, 1, bad);
+  assert.deepEqual(checkHeadSymlinks({ git: scriptedNames(['.gitignore', '..foo', 'a.b', 'x/.hidden/y', 'a/. b/c', 'f.txt']), head: HEAD }), []);
+});
+
+test('FU3 a link name with a backslash voids; a target walked on slash only is checked too', () => {
+  // Breaks when: a link named a\b is looked up as a/b, or the walk reads only the Windows form of a target.
+  assert.equal(symlinkRules({ 'a\\b': 'f.txt' }).length, 1);
+  // Windows reads a\b as two segments (stays inside), a slash-only lookup reads one name (three parent steps leave the tree).
+  assert.equal(symlinkRules({ 'd/l': 'a\\b/../../..' }).length, 1);
+  assert.deepEqual(symlinkRules({ 'd/l': 'a\\b' }), [], 'a backslash target alone is not void');
+});
+
+/** A real repo whose head holds links with names that git refuses in the index on Windows (a backslash). A flat tree from git mktree and commit-tree: no index, no checkout. */
+function repoWithRawLinks(links) {
+  const dir = tmpDir();
+  const run = (input, ...a) => execFileSync('git', a, { cwd: dir, encoding: 'utf8', windowsHide: true, ...(input === null ? {} : { input }) }).trim();
+  run(null, 'init', '-q', '-b', 'main');
+  const rows = Object.entries(links).map(([name, target]) => `120000 blob ${run(target, 'hash-object', '-w', '--stdin')}\t${name}\n`).join('');
+  const tree = run(rows, 'mktree');
+  const head = run(null, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit-tree', tree, '-m', 'c1');
+  return { dir, head };
+}
+
+test('FU3b a real repo: a mixed-case link chain (update-index) and a backslash link name (mktree), no checkout', () => {
+  // Breaks when: the real ls-tree and cat-file path differs from the scripted one.
+  const bad = repoWithLinks({ Alias: '.', leak: 'alias/../outside' });
+  assert.equal(checkHeadSymlinks({ git: gitIn(bad.dir), head: bad.head }).filter((x) => x.rule === 'symlink').length, 1);
+  const back = repoWithRawLinks({ 'a\\b': 'f.txt' });
+  assert.equal(checkHeadSymlinks({ git: gitIn(back.dir), head: back.head }).filter((x) => x.rule === 'symlink').length, 1);
+});
+
+test('FU1b two links whose names differ only in letter case void the head (fail closed), also when no walk escapes', () => {
+  // Breaks when: the lower-case map lets the last of Alias and alias win, so leak -> Alias/../outside (an escape on a case-sensitive file system) reads as inside. CodeRabbit CLI finding, PR run 2.
+  assert.equal(symlinkRules({ Alias: '.', alias: 'sub', leak: 'Alias/../outside' }).length, 1);
+  assert.equal(symlinkRules({ 'd/Up': '..', 'd/up': 'x' }).length, 1, 'in a folder');
+  assert.deepEqual(symlinkRules({ Alias: 'sub', other: 'Alias/x' }), [], 'one link per lower-case name is no collision');
+});
+
+test('FU1d a link whose name equals a tracked folder or file name in lower case, written differently, voids the head', () => {
+  // Breaks when: the collision test compares link names with link names only. Here the lower-case lookup follows the link Alias (to x/y/z), so the real folder alias/ with its link l2 is never walked:
+  // on a case-sensitive file system d/leak -> ../alias/l2/.. goes root, alias, l2 (the root), then above the root. Main (exact-case lookup) voided this head; the first widening let it pass.
+  assert.equal(symlinkRules({ Alias: 'x/y/z', 'alias/l2': '..', 'd/leak': '../alias/l2/..' }).length, 1);
+  // A file named alias beside a link Alias, and a folder prefix of a deeper path.
+  const named = (list) => checkHeadSymlinks({ git: (a) => (a[0] === 'ls-tree' ? { status: 0, stdout: list.map(([mode, n], i) => `${mode} blob ${String(i + 1).padStart(40, '0')}\t${n}\0`).join(''), stderr: '' } : { status: 0, stdout: 'f.txt', stderr: '' }), head: HEAD }).filter((x) => x.rule === 'symlink');
+  assert.equal(named([['120000', 'Alias'], ['100644', 'alias']]).length, 1, 'a file alias');
+  assert.equal(named([['120000', 'Alias'], ['100644', 'alias/deep/f.txt']]).length, 1, 'a folder prefix');
+  assert.deepEqual(named([['120000', 'Alias'], ['100644', 'Aliased/f.txt'], ['100644', 'other']]), [], 'a longer name is not a collision');
+  assert.deepEqual(named([['120000', 'a/Alias'], ['100644', 'alias/f.txt']]), [], 'the same last name in another folder is not a collision');
+});
+
+test('FU1c a name listed twice in the same case is not a collision', () => {
+  // Breaks when: the collision test compares lower-case names only and not the names themselves.
+  const entry = (i) => `120000 blob ${String(i).padStart(40, '0')}\tl\0`;
+  const git = (args) => (args[0] === 'ls-tree' ? { status: 0, stdout: entry(1) + entry(2), stderr: '' } : { status: 0, stdout: 'f.txt', stderr: '' });
+  assert.deepEqual(checkHeadSymlinks({ git, head: HEAD }), []);
+});
+
+test('FU4 AUDIT_VERSION is 2: items 1 to 3 add rules and item 5 adds fields', () => {
+  // Breaks when: a rule or line-format change lands with the version at 1.
+  assert.equal(AUDIT_VERSION, 2);
+});
+
+test('FU5 the state line holds runOk and the result event count, so a cut stream of an incomplete run is told from a full one', () => {
+  // Breaks when: buildLine drops either field, or takes runOk from the wrong place.
+  const dir = tmpDir();
+  const statePath = path.join(dir, 'state.jsonl');
+  const cut = put(dir, 'cut.stream.jsonl.gz', events(['init', 'glob', 'read', 'grep']));
+  const full = put(dir, 'full.stream.jsonl.gz', events(CLEAN));
+  const a = auditReplay({ kind: 'engine', streamPath: cut, runId: 'cut', runOk: false, head: HEAD, pr: 1, round: 1, statePath, tmpdir: TMP }).line;
+  assert.deepEqual([a.verdict, a.runOk, a.resultEvents], ['pass', false, 0]);
+  const b = auditReplay({ kind: 'engine', streamPath: full, runId: 'full', runOk: true, head: HEAD, pr: 1, round: 1, statePath, tmpdir: TMP }).line;
+  assert.deepEqual([b.verdict, b.runOk, b.resultEvents], ['pass', true, 1]);
+  const c = auditReplay({ kind: 'cursor-review', streamPath: full, runId: 'dflt', head: HEAD, pr: 1, round: 1, statePath, tmpdir: TMP }).line;
+  assert.equal(c.runOk, true, 'runOk defaults to true');
+  const d = auditReplay({ kind: 'engine', streamPath: null, runId: 'none', head: HEAD, pr: 1, round: 1, statePath, tmpdir: TMP }).line;
+  assert.deepEqual([d.verdict, d.runOk, d.resultEvents], ['void', true, 0], 'a void with no stream still carries both fields');
+  assert.deepEqual(readLines(statePath).map((l) => [l.runId, l.runOk, l.resultEvents]), [['cut', false, 0], ['full', true, 1], ['dflt', true, 1], ['none', true, 0]]);
+  const single = io();
+  assert.equal(main([full, '--no-record', '--run-id', 'one'], { ...single, tmpdir: TMP }), 0);
+  const printed = JSON.parse(single.text().trim().split('\n').pop());
+  assert.deepEqual([printed.runOk, printed.resultEvents], [true, 1]);
+});
