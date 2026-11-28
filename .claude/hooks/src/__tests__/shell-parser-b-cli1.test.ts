@@ -17,7 +17,7 @@ const P = 'pu' + 'sh';
 const logDir = mkdtempSync(join(tmpdir(), 'shell-parser-b-cli1-'));
 const logFile = join(logDir, 'guard.jsonl');
 afterAll(() => rmSync(logDir, { recursive: true, force: true }));
-const base = { git: () => ({ status: 1, stdout: '' }), readFile: () => null, env: {}, home: '/h' } as unknown as Deps;
+const base = { git: () => ({ status: 1, stdout: '' }), readFile: () => null, env: { CCV3_GUARD_DECISIONS_LOG: logFile }, home: '/h' } as unknown as Deps;
 const payload = (tool_name: string, command: string) => JSON.stringify({ tool_name, tool_input: { command }, cwd: '/repo' });
 const J = (t: string) => judge(t, 'bash', defaultEntry);
 

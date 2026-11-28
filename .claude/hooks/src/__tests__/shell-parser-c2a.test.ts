@@ -222,6 +222,7 @@ describe('CS: the astOnly seam is test-only', () => {
     delete env.VITEST;
     // Card coord-test-log-leak: the child has no VITEST, so it logs its decision. Name a temp log file, or the row goes to the real log.
     const logFile = join(dir, 'cs2-guard.jsonl');
+    env.CCV3_GUARD_DECISIONS_LOG = logFile;
     const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command: `grep -n "${M}" notes.md`, astOnly: true }, cwd: ROOT, session_id: 'c2a-cs2', astOnly: true });
     const r = spawnSync(process.execPath, [BUILT], { input: payload, encoding: 'utf8', env, timeout: 30000, cwd: ROOT });
     expect(r.stdout, r.stderr).toMatch(/"permissionDecision"\s*:\s*"deny"/);
