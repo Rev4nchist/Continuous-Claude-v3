@@ -100,7 +100,7 @@ test('L1: a skipped file fails: vitest exit 0 with every test pending is not a p
 test('L2: zero tests fails', () => {
   const v = verdict(0, report({ numTotalTests: 0, numPassedTests: 0 }));
   assert.equal(v.ok, false);
-  assert.equal(v.line, 'lane-context-db: 0 of 0 passed, 0 skipped');
+  assert.match(v.line, /^lane-context-db: 0 of 0 .*fewer tests than the floor of 19$/);
 });
 
 test('L3: a vitest non-zero exit fails even when every counted test passed', () => {
