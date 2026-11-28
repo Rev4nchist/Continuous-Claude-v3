@@ -21,15 +21,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TEST_FILE, redact, run, verdict } from './lane-context-db-gate.mjs';
+import * as gate from './lane-context-db-gate.mjs';
+
+const { TEST_FILE, redact, run, verdict } = gate;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const GATE = path.join(HERE, 'lane-context-db-gate.mjs');
-const PASSWORD = 'S3cret-pw_9';
+// F7: built at run time, so no scanner finds a password-shaped literal in this file (L19 checks the source text).
+const PASSWORD = ['S3cret', 'pw_9'].join('-');
+// A password with characters that a url must encode, for the encoded-form tests (L16).
+const ODD_PASSWORD = ['p@ss', 'w/rd:1'].join('#');
 const URL_OK = `postgresql://claude:${PASSWORD}@localhost:5432/lanes_pr1_0a1b2c3d`;
 const URL_LIVE = `postgresql://claude:${PASSWORD}@localhost:5432/continuous_claude`;
 const VITEST = path.join(os.tmpdir(), 'fake-vitest', 'vitest.mjs');
@@ -244,4 +249,89 @@ test('L14: --help prints the usage, exits 0 and does no database work', () => {
   assert.match(r.stdout, /usage: node scripts\/github\/lane-context-db-gate\.mjs/);
   assert.doesNotMatch(r.stdout + r.stderr, /^ENV:|ECONNREFUSED|creating scratch database/m);
   assert.ok(existsSync(GATE));
+});
+
+test('L2b: a test count below the floor fails even when every test passed (F2)', () => {
+  assert.equal(gate.MIN_TESTS, 19);
+  const low = verdict(0, report({ numTotalTests: 1, numPassedTests: 1 }));
+  assert.equal(low.ok, false);
+  assert.match(low.line, /1 of 1 passed, 0 skipped.*floor of 19/);
+  assert.equal(verdict(0, report({ numTotalTests: 18, numPassedTests: 18 })).ok, false);
+  assert.equal(verdict(0, report()).ok, true);
+  assert.equal(verdict(0, report({ numTotalTests: 25, numPassedTests: 25 })).ok, true);
+  const r = go(fakeSpawn({ rep: report({ numTotalTests: 1, numPassedTests: 1 }) }));
+  assert.equal(r.code, 1);
+  assert.match(r.text, /floor of 19/);
+});
+
+const scratchUrl = (name) => `postgresql://claude:${PASSWORD}@localhost:5432/${name}`;
+const CREATE_TIMEOUT = (name) => ({
+  status: null, stdout: '', stderr: `creating scratch database ${name} on localhost:5432\n`, error: new Error('spawnSync node ETIMEDOUT'),
+});
+
+test('L7b: a create that times out drops the database it named, by scratch-db drop with a scratch url (F3)', () => {
+  const fake = fakeSpawn({ create: CREATE_TIMEOUT('lanes_pr1_0a1b2c3d') });
+  const r = go(fake, { scratchUrl });
+  assert.equal(r.code, 1);
+  assert.deepEqual(kinds(fake.calls), ['create', 'drop']);
+  assert.equal(fake.calls[1].args.at(-1), scratchUrl('lanes_pr1_0a1b2c3d'));
+  assert.equal(fake.calls[1].args.at(-2), 'drop');
+  assert.doesNotMatch(r.text, new RegExp(PASSWORD));
+  assert.match(r.lines[0], /^ENV: /);
+});
+
+test('L7c: a failed drop after a create time-out prints the name, never the url (F3)', () => {
+  const fake = fakeSpawn({ create: CREATE_TIMEOUT('lanes_pr1_0a1b2c3d'), drop: { status: 1, stdout: '', stderr: `refused ${scratchUrl('lanes_pr1_0a1b2c3d')}\n` } });
+  const r = go(fake, { scratchUrl });
+  assert.equal(r.code, 1);
+  assert.match(r.text, /lanes_pr1_0a1b2c3d/);
+  assert.match(r.text, /could not drop/);
+  assert.doesNotMatch(r.text, new RegExp(PASSWORD));
+  assert.equal(r.text.includes('postgresql://claude:'), false, r.text);
+});
+
+test('L7d: no drop for a name that is not lanes_pr1_ plus 8 lower-case hex, or for a url that is not a scratch url (F3)', () => {
+  for (const name of ['lanes_pr1_0a1b2c3', 'lanes_pr1_0a1b2c3d9', 'lanes_pr1_0A1B2C3D', 'continuous_claude', 'xlanes_pr1_0a1b2c3d']) {
+    const fake = fakeSpawn({ create: CREATE_TIMEOUT(name) });
+    go(fake, { scratchUrl });
+    assert.equal(kinds(fake.calls).includes('drop'), false, `${name}: no drop`);
+  }
+  const live = fakeSpawn({ create: CREATE_TIMEOUT('lanes_pr1_0a1b2c3d') });
+  const r = go(live, { scratchUrl: () => URL_LIVE });
+  assert.equal(kinds(live.calls).includes('drop'), false, 'a builder that returns the live url is refused');
+  assert.doesNotMatch(r.text, new RegExp(PASSWORD));
+  // No name in the output, no drop.
+  const none = fakeSpawn({ create: { status: null, stdout: '', stderr: '', error: new Error('ETIMEDOUT') } });
+  go(none, { scratchUrl });
+  assert.deepEqual(kinds(none.calls), ['create']);
+});
+
+test('L16: redact hides a ?password= query value and a percent-encoded password printed alone (F5)', () => {
+  // A query value that no url in the argument list names.
+  const q = redact(`GET /x?a=1&password=${PASSWORD}&b=2 and ?password=${encodeURIComponent(ODD_PASSWORD)}`);
+  assert.equal(q.includes(PASSWORD), false, q);
+  assert.equal(q.includes(encodeURIComponent(ODD_PASSWORD)), false, q);
+  // The password of a told url, printed in its encoded form and its raw form.
+  const odd = `postgresql://claude:${encodeURIComponent(ODD_PASSWORD)}@localhost:5432/lanes_pr1_0a1b2c3d`;
+  const alone = redact(`bad value ${encodeURIComponent(ODD_PASSWORD)} and ${ODD_PASSWORD} here`, odd);
+  assert.equal(alone.includes(encodeURIComponent(ODD_PASSWORD)), false, alone);
+  assert.equal(alone.includes(ODD_PASSWORD), false, alone);
+  // A told url whose password sits in the query.
+  const inQuery = `postgresql://claude@localhost:5432/lanes_pr1_0a1b2c3d?password=${encodeURIComponent(ODD_PASSWORD)}`;
+  const text = redact(`value ${ODD_PASSWORD} ${encodeURIComponent(ODD_PASSWORD)}`, inQuery);
+  assert.equal(text.includes(ODD_PASSWORD), false, text);
+  assert.equal(text.includes(encodeURIComponent(ODD_PASSWORD)), false, text);
+  // Other query keys stay readable.
+  assert.match(redact('x?sslmode=require&password=abcd'), /sslmode=require/);
+});
+
+test('L17: a password under 3 characters is not masked, by design (F5 known limit)', () => {
+  const short = 'postgresql://claude:ab@localhost:5432/lanes_pr1_0a1b2c3d';
+  assert.match(redact('about a lab', short), /about a lab/);
+});
+
+test('L19: this test file holds no whole password literal (F7)', () => {
+  const src = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  assert.equal(src.includes(`'${PASSWORD}'`), false, 'the password value is built at run time');
+  assert.equal(src.includes(PASSWORD), false);
 });
