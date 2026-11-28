@@ -413,18 +413,26 @@ export function readHeadCommit({ git, head }) {
   const rules = [];
   const tracked = new Set();
   const links = new Map(); // lower-case name -> target of every mode 120000 entry the head holds (the lookup key of a case-blind file system)
-  const caseNames = new Map(); // lower-case link name -> the name as written, to find a collision
-  const linkList = [];// [name, target] of each link, so two names that differ only in letter case are both checked
-  for (const entry of String(ls.stdout ?? '').split('\0')) {
-    const m = /^(\d+) \w+ ([0-9a-f]+)\t([\s\S]+)$/.exec(entry);
-    if (!m) continue;
+  const forms = new Map(); // lower-case name -> the names as written: every tracked name and every folder prefix of a tracked path
+  const flagged = new Set(); // lower-case names already reported as a collision
+  const linkList = []; // [name, target] of each link, so two names that differ only in letter case are both checked
+  const entries = String(ls.stdout ?? '').split('\0').map((e) => /^(\d+) \w+ ([0-9a-f]+)\t([\s\S]+)$/.exec(e)).filter(Boolean);
+  for (const m of entries) {
+    const segs = m[3].split('/');
+    for (let i = 1; i <= segs.length; i += 1) {
+      const prefix = segs.slice(0, i).join('/');
+      const key = prefix.toLowerCase();
+      if (!forms.has(key)) forms.set(key, new Set());
+      forms.get(key).add(prefix);
+    }
+  }
+  for (const m of entries) {
     tracked.add(m[3].toLowerCase());
     if (m[3].split('/').some((seg) => CLIMB_SEG.test(seg))) rules.push(CLIMB_NAME); // git cannot hold a segment of exactly two dots, so every such segment is a hit
     if (m[1] !== '120000') continue;
     if (m[3].includes('\\')) rules.push(SYMLINK); // a POSIX lookup reads a\b as one name, a Windows lookup as two
     const lower = m[3].toLowerCase();
-    if (caseNames.has(lower) && caseNames.get(lower) !== m[3]) rules.push(SYMLINK); // fail closed: two link names that differ only in letter case. The lower-case map keeps one target, so no walk can read both; such a head cannot be checked out on a case-blind file system
-    caseNames.set(lower, m[3]);
+    if (forms.get(lower).size > 1 && !flagged.has(lower)) { flagged.add(lower); rules.push(SYMLINK); } // fail closed: a link name and another tracked name or folder equal in lower case, written differently. The lower-case lookup keeps one target and follows the link past the real folder; such a head cannot be checked out on a case-blind file system
     const blob = git(['cat-file', 'blob', m[2]]);
     if (blob.status !== 0) rules.push(FAILED);
     else { links.set(m[3].toLowerCase(), String(blob.stdout ?? '')); linkList.push([m[3], String(blob.stdout ?? '')]); }
