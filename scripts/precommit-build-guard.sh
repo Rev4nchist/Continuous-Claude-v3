@@ -130,6 +130,46 @@ if command -v node >/dev/null 2>&1 && [ -f "$helper" ]; then
   fi
 fi
 
+# A NEW hook module that no bundle imports yet. Its build changes only dist/.build-inputs.json: one line
+# "<path under src/>": "<sha256 of the file with CR removed>" (.claude/hooks/scripts/write-build-inputs.mjs). So the commit
+# is correct when ALL of these hold; any miss keeps the block below (fail closed, pure git and bash, no import parsing):
+#   a) every staged hook source file is new (status A), and no other file under src/ (not a test, not a .d.ts) is staged;
+#   b) the STAGED .build-inputs.json is changed and holds the hash line of each new file, computed from the staged blob
+#      (this proves the build ran on the staged tree);
+#   c) no dist/*.mjs differs from HEAD, in the index or in the working tree. A bundle that imports the new file would
+#      change in that build, so an unchanged bundle set means nothing imports it.
+BUILD_INPUTS=".claude/hooks/dist/.build-inputs.json"
+new_module_only() {
+  command -v sha256sum >/dev/null 2>&1 || return 1
+  local added others p rel want
+  added="$(git diff --cached --name-only --diff-filter=A 2>/dev/null)" || return 1
+  while IFS= read -r p; do
+    printf '%s\n' "$added" | grep -qxF -- "$p" || return 1
+  done <<< "$src_ts"
+  # (a) any other staged file under src/ (modified, renamed, deleted, or not a .ts) blocks.
+  others="$(git diff --cached --name-only --diff-filter=ACMRTD 2>/dev/null | grep -E '^\.claude/hooks/src/' | grep -v '/__tests__/' | grep -v '\.d\.ts$')" || true
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    printf '%s\n' "$src_ts" | grep -qxF -- "$p" || return 1
+  done <<< "$others"
+  [ -z "$(git diff --cached --name-only --diff-filter=D 2>/dev/null | grep -E '^\.claude/hooks/src/' | grep -v '/__tests__/' | grep -v '\.d\.ts$')" ] || return 1
+  # (b) the staged manifest changed, and lists the staged hash of each new file.
+  git diff --cached --name-only 2>/dev/null | grep -qxF -- "$BUILD_INPUTS" || return 1
+  while IFS= read -r p; do
+    rel="${p#.claude/hooks/src/}"
+    want="$(git show ":$p" 2>/dev/null | tr -d '\r' | sha256sum | cut -d' ' -f1)"
+    [ -n "$want" ] || return 1
+    git show ":$BUILD_INPUTS" 2>/dev/null | grep -qF -- "\"$rel\": \"$want\"" || return 1
+  done <<< "$src_ts"
+  # (c) no bundle changed in the index or the working tree (an error, such as no HEAD, is not a pass).
+  git diff --quiet HEAD -- '.claude/hooks/dist/*.mjs' 2>/dev/null || return 1
+  return 0
+}
+if new_module_only; then
+  echo "precommit-build-guard: staged hook source is new module(s) that no bundle imports; the staged .build-inputs.json holds their hashes and no bundle changed." >&2
+  exit 0
+fi
+
 # BLOCK: source changed but no rebuilt dist staged.
 echo "" >&2
 echo "BLOCKED by precommit-build-guard: staged hook source without rebuilt dist." >&2
